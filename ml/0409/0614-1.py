@@ -419,11 +419,9 @@ def soft_band_mask(
     dx     = (px - x_v) / (half_w + 1e-6)
     yc     = y_v + height * dx.pow(2)
 
-    slope     = 2.0 * height * (px - x_v) / (half_w.pow(2) + 1e-6)
-    dist      = (py - yc).abs()
-    perp_dist = dist / torch.sqrt(1.0 + slope.pow(2))
-
-    band = torch.sigmoid((thickness / 2.0 - perp_dist) / temperature)
+    # 与标注工具 / rasterize_hyperbola_band_mask 一致：thickness 为竖直厚度
+    dist = (py - yc).abs()
+    band = torch.sigmoid((thickness / 2.0 - dist) / temperature)
 
     x_in = (
         torch.sigmoid((px - (x_v - half_w)) / temperature) *
