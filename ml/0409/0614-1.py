@@ -27,22 +27,22 @@ data_sources = [
 
 SEED          = 2
 N_FOLDS       = 7
-input_size    = (224, 224)
+input_size    = (640, 640)
 HM_STRIDE     = 8
 batch_size    = 8
 num_epochs    = 100
 nms_kernel    = 3
-mask_min_area = 20
+mask_min_area = 163
 max_det       = 5
 
-HM_SIGMA      = 1.5
+HM_SIGMA      = 4.3
 LAM           = 1.0
 LAM_BAND      = 1
 BAND_TEMP     = 1
 BAND_LOSS_FN  = 'iou'   # 'iou' 或 'dice'
 LR            = 5e-4
 HM_THRESH     = 0.30
-VERTEX_THRESH = 20.0
+VERTEX_THRESH = 57.0
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
