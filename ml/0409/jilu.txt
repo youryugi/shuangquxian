@@ -8,3 +8,31 @@
 
 
 比较方框的注意 虽然也做前景增强 但是肯定不如双曲线做前景增强的好
+
+0616跑了很久的那个结果  是双曲线的结果
+Summary:
+  instance_recall  = 0.8763 ± 0.0560  (顶点距离 ≤ 57px 算检出)
+  mean_vertex_dist = 6.38 ± 0.66 px
+  mAP50            = 0.4869 ± 0.0800
+  global_iou       = 0.5005 ± 0.0411
+
+  YOLO 的检测级 F1(conf=0.30,IoU≥0.5,基于 bbox 匹配):
+
+方法	Precision	Recall	F1
+YOLO scratch(from scratch)	0.725	0.794	0.755
+YOLO pretrained(COCO 预训练)	0.843	0.947	0.891
+对照你的方法(双曲线→框,bbox 级 F1):
+
+方法	条件	F1
+你的方法 @ 0.30	from scratch	0.656
+你的方法 @ 0.40(最佳)	from scratch	0.683
+YOLO scratch	from scratch	0.755
+YOLO pretrained	COCO 预训练	0.891
+提醒一下当前的处境
+
+改进方向:让门控真正"抑制背景"
+把门控从"只增强带"改成"增强带 + 抑制背景",注意力的聚焦才能真正影响检测:
+
+F × gate(纯乘法,背景被压低)—— 最强但可能抹信息
+F × (0.5 + gate) 或 F × (1 + α·gate) 带更大 α —— 折中
+或把 A concat 回特征让网络显式依赖它
