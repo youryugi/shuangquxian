@@ -1,0 +1,494 @@
+"""
+自己完结・单文件版：CenterNet 检测头 + 显式注意力监督（双曲线带 mask 监督注意力图）。
+把 0616-1.py / attn_cnn.py / attn_cnn_relative.py 中本实验需要的部分全部合并到这一个文件，
+不再 import 其它脚本。
+
+三种注意力模式作为参数（--modes 选择，默认三种全跑）：
+  none : 无注意力        —— 纯 CenterNet，不加注意力 head / 不加注意力 loss
+  abs  : abs 注意力      —— A(x) ≈ band mask 绝对逐像素匹配（BCE + Dice）
+  soft : 软（相对）注意力 —— 只要求 带内均值 − 带外均值 ≥ margin 的 margin-hinge 软约束
+                            （原 attn_cnn_relative.py 的 "rel"，相对约束、对边界误差几乎免疫）
+
+用法：
+  python attn_cnn_merged.py                  # 跑 none / abs / soft 三种
+  python attn_cnn_merged.py --modes soft     # 只跑软注意力
+  python attn_cnn_merged.py --modes abs soft # 跑 abs + soft
+  python attn_cnn_merged.py --seeds 0 1 2    # 指定随机种子
+"""
+import os
+import re
+import csv
+import json
+import random
+import argparse
+from datetime import datetime
+
+import cv2
+import numpy as np
+from PIL import Image
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Subset, Dataset
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 超参数（可调）
+# ══════════════════════════════════════════════════════════════════════════════
+_HERE      = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))   # ml/0409 -> ml -> repo
+
+IMG_DIR   = os.path.join(_REPO_ROOT, "dataset3", "images-selected")
+HYP_JSON  = os.path.join(IMG_DIR, "annotations.json")
+RECT_JSON = os.path.join(IMG_DIR, "annotations_rect.json")
+
+# —— 实验配置（直接改这两个；命令行 --modes / --seeds 可覆盖）——
+MODES        = ["none", "abs", "soft"]   # 要跑的注意力模式：none(无) / abs(绝对) / soft(软-相对)
+SEEDS        = [0, 1, 2, 3, 4]           # 随机种子，如 [1, 2, 3, 4]
+
+input_size   = (640, 640)
+HM_STRIDE    = 8                    # heatmap 下采样步长
+ATTN_STRIDE  = 4                    # 注意力图下采样步长
+HM_SIGMA     = 4.3                  # heatmap 高斯半径
+batch_size   = 8
+num_epochs   = 100
+LR           = 5e-4                 # Adam 学习率
+nms_kernel   = 3
+max_det      = 5
+HM_THRESH    = 0.30                 # 解码峰值阈值
+BBOX_IOU_THR = 0.5                 # 评测匹配 IoU 阈值
+BASE_CH      = 32                   # 网络通道基数
+
+# —— 注意力监督相关（调参核心）——
+LAM_ATT      = 1.0                  # 注意力 loss 与主 loss(focal+L1) 的权重
+MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. 基础工具
+# ══════════════════════════════════════════════════════════════════════════════
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def make_split(n_total, seed, train_frac=0.70, val_frac=0.15):
+    """按种子随机划分 train/val/test（默认 70/15/15）。"""
+    idx = list(range(n_total))
+    rng = random.Random(seed)
+    rng.shuffle(idx)
+    n_train = int(round(n_total * train_frac))
+    n_val   = int(round(n_total * val_frac))
+    return idx[:n_train], idx[n_train:n_train + n_val], idx[n_train + n_val:]
+
+
+def render_gaussian(heatmap, cx, cy, sigma):
+    hm_h, hm_w = heatmap.shape
+    ys = np.arange(hm_h, dtype=np.float32)[:, None]
+    xs = np.arange(hm_w, dtype=np.float32)[None, :]
+    g  = np.exp(-((xs - cx) ** 2 + (ys - cy) ** 2) / (2.0 * sigma ** 2))
+    np.maximum(heatmap, g, out=heatmap)
+
+
+def rasterize_hyperbola_band_mask(h, w, x_v, y_v, width, height, thickness):
+    """与标注工具一致：thickness 为竖直厚度（沿 y 方向偏移 ±thickness/2）。"""
+    width     = max(float(width),     2.0)
+    height    = max(float(height),    1.0)
+    thickness = max(float(thickness), 1.0)
+    half_w    = width / 2.0
+    n_pts     = max(40, int(round(width)))
+    upper_pts, lower_pts = [], []
+    for i in range(n_pts + 1):
+        t  = i / max(n_pts, 1)
+        x  = (x_v - half_w) + width * t
+        dx = (x - x_v) / (half_w + 1e-6)
+        yc = y_v + height * dx ** 2
+        upper_pts.append((x, yc - thickness / 2.0))
+        lower_pts.append((x, yc + thickness / 2.0))
+    poly = np.array(upper_pts + list(reversed(lower_pts)), dtype=np.float32)
+    poly[:, 0] = np.clip(poly[:, 0], 0, w - 1)
+    poly[:, 1] = np.clip(poly[:, 1], 0, h - 1)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [np.round(poly).astype(np.int32)], 1)
+    return mask.astype(np.float32)
+
+
+def bbox_iou(a, b):
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    aa = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    bb = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    return inter / max(aa + bb - inter, 1e-6)
+
+
+def hyperbola_to_bbox(o):
+    hw = o["width"] / 2.0
+    return [o["x_vertex"] - hw, o["y_vertex"] - o["thickness"] / 2.0,
+            o["x_vertex"] + hw, o["y_vertex"] + o["height"] + o["thickness"] / 2.0]
+
+
+def _heatmap_nms(hm, kernel):
+    t    = torch.from_numpy(hm).unsqueeze(0).unsqueeze(0)
+    tmax = F.max_pool2d(t, kernel, stride=1, padding=kernel // 2)
+    keep = (t == tmax).squeeze(0).squeeze(0).numpy()
+    return hm * keep
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. 数据集
+# ══════════════════════════════════════════════════════════════════════════════
+class AttnDataset(Dataset):
+    def __init__(self, input_size=(640, 640), hm_stride=8, sigma=4.3):
+        self.input_h, self.input_w = input_size
+        self.gh, self.gw = self.input_h // hm_stride, self.input_w // hm_stride
+        self.attn_h, self.attn_w = self.input_h // ATTN_STRIDE, self.input_w // ATTN_STRIDE
+        self.stride, self.sigma = hm_stride, sigma
+        with open(HYP_JSON, "r", encoding="utf-8") as f:
+            self.hyp = json.load(f)
+        with open(RECT_JSON, "r", encoding="utf-8") as f:
+            self.rect = json.load(f)
+        self.names = sorted(self.hyp.keys(),
+                            key=lambda n: [int(x) for x in re.findall(r'\d+', n)] or [0])
+
+    def __len__(self):
+        return len(self.names)
+
+    def __getitem__(self, idx):
+        name = self.names[idx]
+        path = os.path.join(IMG_DIR, name)
+        img = Image.open(path).convert("L")
+        ow, oh = img.size
+        img = img.resize((self.input_w, self.input_h), Image.BILINEAR)
+        img_np = np.array(img, dtype=np.float32) / 255.0
+        sx, sy = self.input_w / ow, self.input_h / oh
+
+        hm = np.zeros((self.gh, self.gw), np.float32)
+        wh = np.zeros((2, self.gh, self.gw), np.float32)
+        off = np.zeros((2, self.gh, self.gw), np.float32)
+        peak = np.zeros((self.gh, self.gw), np.float32)
+        for r in self.rect.get(name, []):
+            if r.get("label", "") != "hyperbola":
+                continue
+            bw, bh = r["width"] * sx, r["height"] * sy
+            cx, cy = r["x1"] * sx + bw / 2.0, r["y1"] * sy + bh / 2.0
+            fx, fy = cx / self.stride, cy / self.stride
+            xi = int(np.clip(round(fx), 0, self.gw - 1)); yi = int(np.clip(round(fy), 0, self.gh - 1))
+            render_gaussian(hm, fx, fy, self.sigma)
+            wh[0, yi, xi] = bw / self.input_w; wh[1, yi, xi] = bh / self.input_h
+            off[0, yi, xi] = fx - xi; off[1, yi, xi] = fy - yi
+            peak[yi, xi] = 1.0
+
+        band_full = np.zeros((self.input_h, self.input_w), np.float32)
+        meta_objs = []
+        for o in self.hyp.get(name, []):
+            if o.get("label", "") != "hyperbola":
+                continue
+            mo = {"x_vertex": o["x_vertex"] * sx, "y_vertex": o["y_vertex"] * sy,
+                  "width": o["width"] * sx, "height": o["height"] * sy, "thickness": o["thickness"] * sy}
+            meta_objs.append(mo)
+            band_full = np.maximum(band_full, rasterize_hyperbola_band_mask(
+                self.input_h, self.input_w, mo["x_vertex"], mo["y_vertex"],
+                mo["width"], mo["height"], mo["thickness"]))
+        band = cv2.resize(band_full, (self.attn_w, self.attn_h), interpolation=cv2.INTER_AREA)
+        band = (band > 0.5).astype(np.float32)
+
+        meta = {"image_name": name, "image_path": path, "objects": meta_objs, "orig_size": (oh, ow)}
+        return (torch.from_numpy(img_np).unsqueeze(0).float(),
+                torch.from_numpy(hm).unsqueeze(0).float(),
+                torch.from_numpy(wh).float(),
+                torch.from_numpy(off).float(),
+                torch.from_numpy(peak).unsqueeze(0).float(),
+                torch.from_numpy(band).unsqueeze(0).float(),
+                meta)
+
+
+def collate(batch):
+    imgs, hms, whs, offs, pks, bands, metas = zip(*batch)
+    return (torch.stack(imgs), torch.stack(hms), torch.stack(whs), torch.stack(offs),
+            torch.stack(pks), torch.stack(bands), list(metas))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. 模型
+# ══════════════════════════════════════════════════════════════════════════════
+class ConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
+        )
+    def forward(self, x): return self.block(x)
+
+
+class DownBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv = ConvBlock(in_ch, out_ch)
+        self.pool = nn.MaxPool2d(2)
+    def forward(self, x):
+        feat = self.conv(x)
+        return feat, self.pool(feat)
+
+
+class AttnBBoxNet(nn.Module):
+    def __init__(self, in_ch=1, base_ch=32, use_attn=True):
+        super().__init__()
+        self.use_attn = use_attn
+        self.down1 = DownBlock(in_ch, base_ch)
+        self.down2 = DownBlock(base_ch, base_ch * 2)
+        self.down3 = DownBlock(base_ch * 2, base_ch * 4)
+        self.bottleneck = ConvBlock(base_ch * 4, base_ch * 8)
+        mid = base_ch * 8
+        if use_attn:
+            self.attn_head = nn.Sequential(
+                nn.Conv2d(base_ch * 4, base_ch * 2, 3, padding=1, bias=False),
+                nn.BatchNorm2d(base_ch * 2), nn.ReLU(inplace=True), nn.Conv2d(base_ch * 2, 1, 1))
+        self.heatmap_head = nn.Sequential(
+            nn.Conv2d(mid, mid // 2, 3, padding=1, bias=False),
+            nn.BatchNorm2d(mid // 2), nn.ReLU(inplace=True), nn.Conv2d(mid // 2, 1, 1))
+        self.wh_head = nn.Sequential(
+            nn.Conv2d(mid, mid // 2, 3, padding=1, bias=False),
+            nn.BatchNorm2d(mid // 2), nn.ReLU(inplace=True), nn.Conv2d(mid // 2, 2, 1))
+        self.offset_head = nn.Sequential(
+            nn.Conv2d(mid, mid // 4, 3, padding=1, bias=False),
+            nn.BatchNorm2d(mid // 4), nn.ReLU(inplace=True), nn.Conv2d(mid // 4, 2, 1))
+
+    def forward(self, x):
+        _, x = self.down1(x); _, x = self.down2(x)
+        f3, x = self.down3(x)
+        feat = self.bottleneck(x)
+        a_logit = None
+        if self.use_attn:
+            a_logit = self.attn_head(f3)
+            gate = F.avg_pool2d(torch.sigmoid(a_logit), 2)
+            feat = feat * (1.0 + gate)   # 只增强双曲线带、不抑制背景
+        return self.heatmap_head(feat), torch.sigmoid(self.wh_head(feat)), self.offset_head(feat), a_logit
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. Loss
+# ══════════════════════════════════════════════════════════════════════════════
+def focal_loss_heatmap(pred_logit, target_hm, peak_mask, alpha=2.0, beta=4.0):
+    pred     = torch.sigmoid(pred_logit)
+    pos_mask = peak_mask
+    neg_w    = (1.0 - target_hm) ** beta
+    pos_loss = pos_mask * (1.0 - pred) ** alpha * torch.log(pred.clamp(min=1e-6))
+    neg_loss = neg_w * (1.0 - pos_mask) * pred ** alpha * torch.log((1.0 - pred).clamp(min=1e-6))
+    n_pos    = pos_mask.sum().clamp(min=1.0)
+    return -(pos_loss + neg_loss).sum() / n_pos
+
+
+def masked_l1(pred, gt, peak):
+    mask = peak.expand_as(pred); n = mask.sum()
+    if n == 0:
+        return pred.sum() * 0.0
+    return F.l1_loss(pred * mask, gt * mask, reduction="sum") / (n / pred.shape[1] + 1e-6)
+
+
+def attn_loss_abs(a_logit, band):
+    """abs：A(x) ≈ band mask 绝对逐像素匹配（BCE + Dice）。"""
+    bce = F.binary_cross_entropy_with_logits(a_logit, band)
+    p = torch.sigmoid(a_logit)
+    dice = 1.0 - 2.0 * (p * band).sum() / (p.sum() + band.sum() + 1e-6)
+    return bce + dice
+
+
+def attn_loss_soft(a_logit, band, margin=MARGIN):
+    """soft（相对）：margin-hinge，只约束带内/带外平均注意力的相对差。"""
+    A = torch.sigmoid(a_logit)
+    eps = 1e-6
+    s_in  = (A * band).sum(dim=(1, 2, 3))
+    s_out = (A * (1.0 - band)).sum(dim=(1, 2, 3))
+    n_in  = band.sum(dim=(1, 2, 3)).clamp(min=eps)
+    n_out = (1.0 - band).sum(dim=(1, 2, 3)).clamp(min=eps)
+    mean_in  = s_in / n_in
+    mean_out = s_out / n_out
+    return torch.relu(margin - (mean_in - mean_out)).mean()
+
+
+def compute_loss(model, img, hm, wh, off, peak, band, attn_mode):
+    hm_logit, wh_p, off_p, a_logit = model(img)
+    loss = (focal_loss_heatmap(hm_logit, hm, peak)
+            + masked_l1(wh_p, wh, peak) + masked_l1(off_p, off, peak))
+    if model.use_attn:
+        if attn_mode == "abs":
+            loss = loss + LAM_ATT * attn_loss_abs(a_logit, band)
+        elif attn_mode == "soft":
+            loss = loss + LAM_ATT * attn_loss_soft(a_logit, band)
+    return loss
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 5. 训练
+# ══════════════════════════════════════════════════════════════════════════════
+def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed):
+    set_seed(seed)
+    use_attn = (attn_mode != "none")
+    tl = DataLoader(Subset(full, tr), batch_size=batch_size, shuffle=True,
+                    num_workers=0, collate_fn=collate)
+    vl = DataLoader(Subset(full, va), batch_size=batch_size, shuffle=False,
+                    num_workers=0, collate_fn=collate)
+    model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=use_attn).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    best, bp = float("inf"), os.path.join(work, f"{tag}_best.pth")
+    for ep in range(1, n_ep + 1):
+        model.train()
+        for img, hm, wh, off, pk, band, _ in tl:
+            img, hm, wh, off, pk, band = [t.to(device) for t in (img, hm, wh, off, pk, band)]
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
+                loss = compute_loss(model, img, hm, wh, off, pk, band, attn_mode)
+            opt.zero_grad(); loss.backward(); opt.step()
+        model.eval(); tot = 0.0
+        with torch.no_grad():
+            for img, hm, wh, off, pk, band, _ in vl:
+                img, hm, wh, off, pk, band = [t.to(device) for t in (img, hm, wh, off, pk, band)]
+                with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
+                    tot += compute_loss(model, img, hm, wh, off, pk, band, attn_mode).item()
+        va_loss = tot / max(len(vl), 1)
+        if va_loss < best:
+            best = va_loss; torch.save(model.state_dict(), bp)
+        if ep % 20 == 0 or ep == n_ep:
+            print(f"  [{tag}] epoch {ep}/{n_ep} val={va_loss:.4f}", flush=True)
+    model.load_state_dict(torch.load(bp, map_location=device)); model.eval()
+    return model
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6. 推理 / 评估
+# ══════════════════════════════════════════════════════════════════════════════
+@torch.no_grad()
+def predict(model, img_tensor):
+    input_h, input_w = input_size
+    gh, gw = input_h // HM_STRIDE, input_w // HM_STRIDE
+    hm_logit, wh_p, off_p, a_logit = model(img_tensor.to(device))
+    hm = torch.sigmoid(hm_logit[0, 0]).float().cpu().numpy()
+    hm_nms = _heatmap_nms(hm, nms_kernel)
+    ys, xs = np.where(hm_nms >= HM_THRESH)
+    boxes, scores = [], []
+    if len(ys) > 0:
+        sc = hm_nms[ys, xs]; order = np.argsort(sc)[::-1][:max_det]
+        ys, xs, sc = ys[order], xs[order], sc[order]
+        whp, ofp = wh_p[0].float().cpu().numpy(), off_p[0].float().cpu().numpy()
+        for yi, xi in zip(ys, xs):
+            bw = float(whp[0, yi, xi]) * input_w; bh = float(whp[1, yi, xi]) * input_h
+            cx = (xi + float(np.clip(ofp[0, yi, xi], -0.5, 0.5))) / gw * input_w
+            cy = (yi + float(np.clip(ofp[1, yi, xi], -0.5, 0.5))) / gh * input_h
+            boxes.append([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]); scores.append(float(hm_nms[yi, xi]))
+    A = torch.sigmoid(a_logit[0, 0]).float().cpu().numpy() if a_logit is not None else None
+    return boxes, scores, A
+
+
+@torch.no_grad()
+def evaluate(model, dataset, test_idx):
+    TP = FP = FN = 0
+    ai = au = 0.0
+    for i in test_idx:
+        img, _, _, _, _, band, meta = dataset[i]
+        boxes, scores, A = predict(model, img.unsqueeze(0))
+        gt = [hyperbola_to_bbox(o) for o in meta["objects"]]
+        matched = [False] * len(gt)
+        for b, _ in sorted(zip(boxes, scores), key=lambda z: -z[1]):
+            bi, bj = 0.0, -1
+            for j, gb in enumerate(gt):
+                if matched[j]:
+                    continue
+                iou = bbox_iou(b, gb)
+                if iou > bi:
+                    bi, bj = iou, j
+            if bi >= BBOX_IOU_THR and bj >= 0:
+                matched[bj] = True; TP += 1
+            else:
+                FP += 1
+        FN += len(gt) - sum(matched)
+        if A is not None:
+            ab = A > 0.5; bb = band[0].numpy() > 0.5
+            ai += float(np.logical_and(ab, bb).sum()); au += float(np.logical_or(ab, bb).sum())
+    P = TP / max(TP + FP, 1e-9); R = TP / max(TP + FN, 1e-9)
+    return {"bbox_P": P, "bbox_R": R, "bbox_F1": 2 * P * R / max(P + R, 1e-9),
+            "attn_band_iou": (ai / au) if au > 0 else float("nan")}
+
+
+@torch.no_grad()
+def attn_gap(model, full, test_idx):
+    """test 上的 带内 − 带外 平均注意力差（soft 模式的直接目标）。"""
+    ins, outs = [], []
+    for i in test_idx:
+        img, _, _, _, _, band, _ = full[i]
+        _, _, A = predict(model, img.unsqueeze(0))
+        if A is None:
+            return float("nan")
+        b = band[0].numpy()
+        m = b > 0.5
+        if m.sum() < 1:
+            continue
+        ins.append(float(A[m].mean())); outs.append(float(A[~m].mean()))
+    if not ins:
+        return float("nan")
+    return float(np.mean(ins) - np.mean(outs))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 7. 主程序：none / abs / soft 三方对比
+# ══════════════════════════════════════════════════════════════════════════════
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--modes", nargs="+", default=MODES,
+                        choices=["none", "abs", "soft"], help="要跑的注意力模式")
+    parser.add_argument("--seeds", nargs="+", type=int, default=SEEDS, help="随机种子")
+    parser.add_argument("--epochs", type=int, default=num_epochs)
+    args = parser.parse_args()
+
+    work = os.path.join(os.getcwd(), f"attn_cnn_merged_{datetime.now().strftime('%m%d_%H%M')}")
+    os.makedirs(work, exist_ok=True)
+    print("Using device:", device)
+    full = AttnDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
+    n = len(full)
+    print(f"[merged] n_total={n}  modes={args.modes}  seeds={args.seeds}  "
+          f"margin={MARGIN}  lam_att={LAM_ATT}  70/15/15", flush=True)
+
+    rows = []
+    for seed in args.seeds:
+        tr, va, te = make_split(n, seed, train_frac=0.70, val_frac=0.15)
+        print(f"\n=== seed {seed}  train={len(tr)} val={len(va)} test={len(te)} ===", flush=True)
+        for attn_mode in args.modes:
+            model = train_model(attn_mode, full, tr, va, args.epochs, work, f"seed{seed}_{attn_mode}", seed)
+            m = evaluate(model, full, te)
+            gap = attn_gap(model, full, te)
+            print(f"  seed{seed} {attn_mode:>4}: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
+                  f"F1={m['bbox_F1']:.4f} attn_iou={m['attn_band_iou']:.4f} gap={gap:.4f}", flush=True)
+            rows.append({"seed": seed, "config": attn_mode, "bbox_P": m["bbox_P"], "bbox_R": m["bbox_R"],
+                         "bbox_F1": m["bbox_F1"], "attn_band_iou": m["attn_band_iou"], "attn_gap": gap})
+
+    keys = ["bbox_P", "bbox_R", "bbox_F1", "attn_band_iou", "attn_gap"]
+    print("\n" + "=" * 96)
+    print(f"{'config':>8}" + "".join(f"{k:>16}" for k in keys))
+    for cfg in args.modes:
+        sub = [r for r in rows if r["config"] == cfg]
+        if not sub:
+            continue
+        line = f"{cfg:>8}"
+        for k in keys:
+            vals = [r[k] for r in sub if not (isinstance(r[k], float) and np.isnan(r[k]))]
+            line += f"{np.mean(vals):>8.4f}±{np.std(vals):<7.4f}" if vals else f"{'nan':>16}"
+        print(line)
+    print("=" * 96)
+
+    with open(os.path.join(work, "merged_results.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
+    print(f"\nSaved -> {work}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

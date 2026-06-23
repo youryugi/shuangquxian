@@ -42,7 +42,7 @@ SEED         = 0
 ANCHOR_SCALES = (32.0, 64.0, 128.0)   # 锚框基准边长（输入分辨率像素）
 ANCHOR_RATIOS = (0.5, 1.0, 2.0)       # 宽高比 w/h（>1 更宽，适配横向双曲线包围框）
 POS_IOU      = 0.5                    # IoU≥此值的 anchor 记为正样本
-NEG_IOU      = 0.4                    # IoU<此值的 anchor 记为负样本（之间忽略）
+NEG_IOU      = 0.2                    # IoU<此值的 anchor 记为负样本（之间忽略）
 LAM_REG      = 1.0                    # 框回归 smooth-L1 权重
 FOCAL_ALPHA  = 0.25
 FOCAL_GAMMA  = 2.0
@@ -382,7 +382,8 @@ def main():
     exp.set_seed(SEED)
     full = AnchorDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
     n = len(full)
-    train_idx, val_idx, test_idx = exp.make_split(n, SEED)
+    # 70/15/15，与 attn_anchor_nms.py 对齐（make_split 默认绑定 0.5/0.25，必须显式传）
+    train_idx, val_idx, test_idx = exp.make_split(n, SEED, train_frac=0.70, val_frac=0.15)
     work = os.path.join(os.getcwd(), "anchor_nms_out"); os.makedirs(work, exist_ok=True)
     print(f"device={device}  total={n}  anchors/grid={NUM_ANCHORS}  "
           f"total_anchors={ANCHORS_NP.shape[0]}", flush=True)
@@ -390,6 +391,13 @@ def main():
     model = train_model(full, train_idx, val_idx, num_epochs, work, "no_attn")
     m = evaluate(model, full, test_idx)
     print(f"[no_attn] P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} F1={m['bbox_F1']:.4f}", flush=True)
+
+    import csv
+    csv_path = os.path.join(work, "results_noattn.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["config", "bbox_P", "bbox_R", "bbox_F1"])
+        w.writeheader(); w.writerow({"config": "no_attn", **m})
+    print(f"Saved metrics -> {csv_path}", flush=True)
 
 
 if __name__ == "__main__":

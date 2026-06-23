@@ -264,3 +264,50 @@ def evaluate(model, dataset, test_idx):
     P = TP / max(TP + FP, 1e-9); R = TP / max(TP + FN, 1e-9)
     return {"bbox_P": P, "bbox_R": R, "bbox_F1": 2 * P * R / max(P + R, 1e-9),
             "attn_band_iou": (ai / au) if au > 0 else float("nan")}
+
+
+# ── 多 seed 消融（with_attn vs no_attn，70/15/15）──────────────────────────────
+def main():
+    import csv
+    from datetime import datetime
+
+    global SEED
+    SEEDS = [0, 1, 2, 3, 4]
+    work = os.path.join(os.getcwd(), f"attn_cnn_{datetime.now().strftime('%m%d_%H%M')}")
+    os.makedirs(work, exist_ok=True)
+    full = AttnDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
+    n = len(full)
+    print(f"[attn_cnn 多seed消融]  n_total={n}  70/15/15  seeds={SEEDS}")
+
+    rows = []
+    for seed in SEEDS:
+        # 显式传 0.70/0.15（make_split 默认绑定 0.5/0.25，必须覆盖）
+        tr, va, te = exp.make_split(n, seed, train_frac=0.70, val_frac=0.15)
+        print(f"\n=== seed {seed}  train={len(tr)} val={len(va)} test={len(te)} ===")
+        for use_attn, tag in [(True, "with_attn"), (False, "no_attn")]:
+            SEED = seed   # train_model 内 set_seed 用当前 seed
+            model = train_model(use_attn, full, tr, va, num_epochs, work, f"seed{seed}_{tag}")
+            m = evaluate(model, full, te)
+            print(f"  seed{seed} {tag}: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
+                  f"F1={m['bbox_F1']:.4f} attn_iou={m['attn_band_iou']:.4f}")
+            row = {"seed": seed, "config": tag}; row.update(m); rows.append(row)
+
+    keys = ["bbox_P", "bbox_R", "bbox_F1", "attn_band_iou"]
+    print("\n" + "=" * 70)
+    print(f"{'config':>12}" + "".join(f"{k:>16}" for k in keys))
+    for tag in ["with_attn", "no_attn"]:
+        sub = [r for r in rows if r["config"] == tag]
+        line = f"{tag:>12}"
+        for k in keys:
+            vals = [r[k] for r in sub if not (isinstance(r[k], float) and np.isnan(r[k]))]
+            line += f"{np.mean(vals):>8.4f}±{np.std(vals):<7.4f}" if vals else f"{'nan':>16}"
+        print(line)
+    print("=" * 70)
+
+    with open(os.path.join(work, "attn_cnn_multiseed.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
+    print(f"\nSaved -> {work}")
+
+
+if __name__ == "__main__":
+    main()

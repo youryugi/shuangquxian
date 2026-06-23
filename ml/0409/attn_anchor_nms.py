@@ -10,6 +10,7 @@ work 的方法模块（anchor 版）：预设锚框(anchor) + 框回归 + IoU-NM
 
 骨干网络、注意力门控、band 监督全部复用 attn_cnn 的思路；仅检测头与解码不同，
 方便与 attn_cnn.py 做同口径对比（evaluate 返回相同的 bbox_P/R/F1 + attn_band_iou）。
+先是no attn 然后是 with attn
 """
 import os
 import re
@@ -37,9 +38,9 @@ input_size   = exp.input_size
 HM_STRIDE    = exp.HM_STRIDE          # 检测头所在的下采样步长（stride8）
 HM_SIGMA     = exp.HM_SIGMA
 batch_size   = exp.batch_size
-num_epochs   = exp.num_epochs
+num_epochs   = 20
 LR           = exp.LR
-SEED         = 0
+SEED         = 1
 
 # ── stride4 注意力监督（与 attn_cnn.py 一致）──────────────────────────────────
 ATTN_STRIDE  = 4
@@ -49,13 +50,13 @@ LAM_ATT      = 1.0
 ANCHOR_SCALES = (32.0, 64.0, 128.0)   # 锚框基准边长（输入分辨率像素）
 ANCHOR_RATIOS = (0.5, 1.0, 2.0)       # 宽高比 w/h（>1 更宽，适配横向双曲线包围框）
 POS_IOU      = 0.5                    # IoU≥此值的 anchor 记为正样本
-NEG_IOU      = 0.4                    # IoU<此值的 anchor 记为负样本（之间忽略）
+NEG_IOU      = 0.2                    # IoU<此值的 anchor 记为负样本（之间忽略）
 LAM_REG      = 1.0                    # 框回归 smooth-L1 权重
 FOCAL_ALPHA  = 0.25
 FOCAL_GAMMA  = 2.0
 SCORE_THRESH = 0.30                   # 推理 objectness 阈值
 NMS_IOU      = 0.50                   # NMS IoU 阈值
-MAX_DET      = 20
+MAX_DET      = 5
 BBOX_IOU_THR = 0.5                    # 评估时判定 TP 的 IoU 阈值
 _BBOX_CLAMP  = math.log(1000.0 / 16.0)  # 解码时对 dw/dh 限幅，防 exp 溢出
 
@@ -424,17 +425,25 @@ def main():
     exp.set_seed(SEED)
     full = AnchorDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
     n = len(full)
-    train_idx, val_idx, test_idx = exp.make_split(n, SEED)
+    train_idx, val_idx, test_idx = exp.make_split(n, SEED, train_frac=0.70, val_frac=0.15)
     work = os.path.join(os.getcwd(), "anchor_nms_out"); os.makedirs(work, exist_ok=True)
     print(f"device={device}  total={n}  anchors/grid={NUM_ANCHORS}  "
           f"total_anchors={ANCHORS_NP.shape[0]}", flush=True)
     print(f"split: train={len(train_idx)} val={len(val_idx)} test={len(test_idx)}", flush=True)
+    rows = []
     for use_attn in (False, True):
         tag = "with_attn" if use_attn else "no_attn"
         model = train_model(use_attn, full, train_idx, val_idx, num_epochs, work, tag)
         m = evaluate(model, full, test_idx)
         print(f"[{tag}] P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
               f"F1={m['bbox_F1']:.4f} attn_band_iou={m['attn_band_iou']:.4f}", flush=True)
+        row = {"config": tag}; row.update(m); rows.append(row)
+
+    import csv
+    csv_path = os.path.join(work, "results.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
+    print(f"Saved metrics -> {csv_path}", flush=True)
 
 
 if __name__ == "__main__":

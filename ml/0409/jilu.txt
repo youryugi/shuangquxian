@@ -36,3 +36,20 @@ YOLO pretrained	COCO 预训练	0.891
 F × gate(纯乘法,背景被压低)—— 最强但可能抹信息
 F × (0.5 + gate) 或 F × (1 + α·gate) 带更大 α —— 折中
 或把 A concat 回特征让网络显式依赖它
+
+
+
+你的 HyperbolaNet 已经在用更强的结构建模了——它直接回归顶点 + width + height + thickness,等于假设了"目标就是一条双曲线"这个数学形式。这是比 self-attention 强得多的先验:
+
+方式	先验强度	适用场景
+self-attention	弱(让网络自己发现结构)	目标没有明确数学形式时
+参数化拟合(你已有)	强(直接写死双曲线方程)	目标有明确形式时 ✅
+
+虽然我新建了一个自注意力的 但是我感觉可能不好。
+
+我觉得可以将厚度删掉。。
+
+
+bbox,no_attn 的结果之前已经有了,而且是完整 5 seed 的:
+来源	F1	P	R	mAP50
+simple_bbox_cnn(= attn_cnn no_attn 等价)	0.627±0.074	0.712	0.568	0.635
