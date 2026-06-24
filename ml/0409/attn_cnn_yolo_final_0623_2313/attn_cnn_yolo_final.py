@@ -1,7 +1,14 @@
 """
-自己完结・单文件版：CenterNet 检测头 + 显式注意力监督（双曲线带 mask 监督注意力图）。
+自己完结・单文件版：YOLO 网格(anchor-free) 矩形框检测头 + 显式注意力监督（双曲线带 mask 监督注意力图）。
 把 0616-1.py / attn_cnn.py / attn_cnn_relative.py 中本实验需要的部分全部合并到这一个文件，
 不再 import 其它脚本。
+
+【检测风格：YOLO 网格 anchor-free（与 attn_cnn_merged_final.py 的 CenterNet 风格不同）】
+  - 监督：objectness 用「硬」目标——只有 GT 框中心所在的网格单元 = 1，其余 = 0；
+    用 obj/noobj 平衡的 BCE（不再用中心高斯热图 + focal）。
+  - 解码：sigmoid(objectness) ≥ 阈值的单元 → 解码出框 → 框级 IoU-NMS（不再用热图 maxpool-NMS）。
+  - 框回归(wh/offset)、注意力(none/abs/soft, gate/concat)、数据集、训练、评估、划分 全部不变。
+  - 注：dataset 里仍会算高斯 hm，但 YOLO 风格用的是 peak(硬中心)，所以 HM_SIGMA 在本版本不起作用。
 
 【与 attn_cnn_merged.py 的区别】
   本版本**直接用最终 epoch 的模型**做推理评估，不再按 val loss 挑选 best、也不回滚。
@@ -39,13 +46,7 @@
 ========================================================================================================
   config  lam_att          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
      abs        1  0.6864±0.1312   0.6030±0.0412   0.6343±0.0682   0.2584±0.0136   0.3296±0.0174 
-
-  水平翻转增强
-  然后
-  config  lam_att          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
-    none        1  0.5740±0.1168   0.4822±0.0654   0.5157±0.0589              nan             nan
-     abs        1  0.6367±0.0371   0.5753±0.0528   0.6027±0.0337   0.2500±0.0134   0.3193±0.0294      
-     """
+"""
 import os
 import re
 import csv
@@ -79,7 +80,7 @@ RECT_JSON = os.path.join(IMG_DIR, "annotations_rect.json")
 
 # —— 实验配置（直接改这几个；命令行 --modes / --seeds / --augment 可覆盖）——
 MODES        = ["none", "abs", "soft"]  
-MODES        = ["abs"]  #  abs(绝对)
+MODES        = ["none","abs"]  #  abs(绝对)
 SEEDS        = [0, 1, 2, 3, 4]           # 随机种子，如 [1, 2, 3, 4]
 AUGMENT      = True                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
@@ -92,14 +93,16 @@ HM_SIGMA     = 6                  # heatmap 高斯半径
 batch_size   = 8
 num_epochs   = 80
 LR           = 5e-4                 # Adam 学习率
-nms_kernel   = 3
+nms_kernel   = 3                   # （YOLO 风格不再用热图 maxpool-NMS，此项无效，保留兼容）
 max_det      = 5
-HM_THRESH    = 0.3                # 解码峰值阈值
+HM_THRESH    = 0.3                  # YOLO：objectness 解码阈值（sigmoid(obj) ≥ 此值才算候选）
 BBOX_IOU_THR = 0.5                 # 评测匹配 IoU 阈值
+NMS_IOU_THR  = 0.5                 # YOLO 解码：框级 IoU-NMS 阈值（IoU ≥ 此值的低分框被抑制）
+LAM_NOOBJ    = 0.5                 # YOLO：objectness 损失中 noobj(背景) 项权重，平衡正负样本
 BASE_CH      = 32                   # 网络通道基数
 
 # —— 注意力监督相关（调参核心）——
-LAM_ATT      = [0.5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
+LAM_ATT      = [0.3,0.5,1,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
 LAM_ATT_CUR  = 1.0                  # 占位用。。。运行时当前权重（主循环按 LAM_ATT 逐个设置；compute_loss 实际用它）
 MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
 
@@ -182,6 +185,17 @@ def _heatmap_nms(hm, kernel):
     tmax = F.max_pool2d(t, kernel, stride=1, padding=kernel // 2)
     keep = (t == tmax).squeeze(0).squeeze(0).numpy()
     return hm * keep
+
+
+def nms_iou(boxes, scores, iou_thr):
+    """YOLO 风格框级 NMS：按分数降序，抑制与已保留框 IoU ≥ 阈值的框。返回保留的索引。"""
+    order = sorted(range(len(boxes)), key=lambda i: -scores[i])
+    keep = []
+    while order:
+        i = order.pop(0)
+        keep.append(i)
+        order = [j for j in order if bbox_iou(boxes[i], boxes[j]) < iou_thr]
+    return keep
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -354,14 +368,13 @@ class AttnBBoxNet(nn.Module):
 # ══════════════════════════════════════════════════════════════════════════════
 # 4. Loss
 # ══════════════════════════════════════════════════════════════════════════════
-def focal_loss_heatmap(pred_logit, target_hm, peak_mask, alpha=2.0, beta=4.0):
-    pred     = torch.sigmoid(pred_logit)
-    pos_mask = peak_mask
-    neg_w    = (1.0 - target_hm) ** beta
-    pos_loss = pos_mask * (1.0 - pred) ** alpha * torch.log(pred.clamp(min=1e-6))
-    neg_loss = neg_w * (1.0 - pos_mask) * pred ** alpha * torch.log((1.0 - pred).clamp(min=1e-6))
-    n_pos    = pos_mask.sum().clamp(min=1.0)
-    return -(pos_loss + neg_loss).sum() / n_pos
+def objectness_loss(obj_logit, peak, lam_noobj=LAM_NOOBJ):
+    """YOLO 风格 objectness：硬目标(中心单元=1，其余=0) 的 BCE，正/负样本分开归一并加权平衡。"""
+    bce = F.binary_cross_entropy_with_logits(obj_logit, peak, reduction="none")
+    pos, neg = peak, 1.0 - peak
+    n_pos = pos.sum().clamp(min=1.0)
+    n_neg = neg.sum().clamp(min=1.0)
+    return (bce * pos).sum() / n_pos + lam_noobj * (bce * neg).sum() / n_neg
 
 
 def masked_l1(pred, gt, peak):
@@ -393,8 +406,8 @@ def attn_loss_soft(a_logit, band, margin=MARGIN):
 
 
 def compute_loss(model, img, hm, wh, off, peak, band, attn_mode):
-    hm_logit, wh_p, off_p, a_logit = model(img)
-    loss = (focal_loss_heatmap(hm_logit, hm, peak)
+    obj_logit, wh_p, off_p, a_logit = model(img)   # 第一头当 objectness 用（YOLO 风格）
+    loss = (objectness_loss(obj_logit, peak)       # 硬中心 BCE，不再用高斯 hm/focal
             + masked_l1(wh_p, wh, peak) + masked_l1(off_p, off, peak))
     if model.use_attn:
         if attn_mode == "abs":
@@ -453,20 +466,21 @@ def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, f
 def predict(model, img_tensor):
     input_h, input_w = input_size
     gh, gw = input_h // HM_STRIDE, input_w // HM_STRIDE
-    hm_logit, wh_p, off_p, a_logit = model(img_tensor.to(device))
-    hm = torch.sigmoid(hm_logit[0, 0]).float().cpu().numpy()
-    hm_nms = _heatmap_nms(hm, nms_kernel)
-    ys, xs = np.where(hm_nms >= HM_THRESH)
+    obj_logit, wh_p, off_p, a_logit = model(img_tensor.to(device))
+    obj = torch.sigmoid(obj_logit[0, 0]).float().cpu().numpy()   # YOLO：objectness 网格
+    ys, xs = np.where(obj >= HM_THRESH)                          # 阈值化得到候选单元
     boxes, scores = [], []
     if len(ys) > 0:
-        sc = hm_nms[ys, xs]; order = np.argsort(sc)[::-1][:max_det]
-        ys, xs, sc = ys[order], xs[order], sc[order]
         whp, ofp = wh_p[0].float().cpu().numpy(), off_p[0].float().cpu().numpy()
+        cand_b, cand_s = [], []
         for yi, xi in zip(ys, xs):
             bw = float(whp[0, yi, xi]) * input_w; bh = float(whp[1, yi, xi]) * input_h
             cx = (xi + float(np.clip(ofp[0, yi, xi], -0.5, 0.5))) / gw * input_w
             cy = (yi + float(np.clip(ofp[1, yi, xi], -0.5, 0.5))) / gh * input_h
-            boxes.append([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]); scores.append(float(hm_nms[yi, xi]))
+            cand_b.append([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2])
+            cand_s.append(float(obj[yi, xi]))
+        keep = nms_iou(cand_b, cand_s, NMS_IOU_THR)[:max_det]    # 框级 IoU-NMS
+        boxes = [cand_b[i] for i in keep]; scores = [cand_s[i] for i in keep]
     A = torch.sigmoid(a_logit[0, 0]).float().cpu().numpy() if a_logit is not None else None
     return boxes, scores, A
 
@@ -540,7 +554,7 @@ def main():
                         help="注意力 loss 权重扫描列表，如 --lam_att 0.3 0.5 2；默认取文件里的 LAM_ATT")
     args = parser.parse_args()
 
-    work = os.path.join(os.getcwd(), f"attn_cnn_merged_final_{datetime.now().strftime('%m%d_%H%M')}")
+    work = os.path.join(os.getcwd(), f"attn_cnn_yolo_final_{datetime.now().strftime('%m%d_%H%M')}")
     os.makedirs(work, exist_ok=True)
     # 把本次运行用的脚本快照复制到结果目录，便于复现（结果与代码一一对应）
     import shutil
@@ -548,7 +562,7 @@ def main():
     print("Using device:", device)
     full = AttnDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
     n = len(full)
-    print(f"[merged] n_total={n}  modes={args.modes}  seeds={args.seeds}  "
+    print(f"[yolo] n_total={n}  modes={args.modes}  seeds={args.seeds}  "
           f"margin={MARGIN}  lam_att_sweep={args.lam_att}  augment={args.augment}  fuse={args.fuse}  run_val={args.val}  70/0/30", flush=True)
 
     rows = []

@@ -53,3 +53,381 @@ self-attention	弱(让网络自己发现结构)	目标没有明确数学形式�
 bbox,no_attn 的结果之前已经有了,而且是完整 5 seed 的:
 来源	F1	P	R	mAP50
 simple_bbox_cnn(= attn_cnn no_attn 等价)	0.627±0.074	0.712	0.568	0.635
+
+
+在autodl上(base) root@autodl-container-a2aa4d9061-443321d3:~/test/dataset3# /root/miniconda3/bin/python /root/test/dataset3/attn_cnn_merged_final.py
+cd /root/test/dataset3
+Using device: cuda
+[merged] n_total=315  modes=['abs']  seeds=[0, 1, 2, 3, 4]  margin=0.5  lam_att_sweep=[1]  augment=False  fuse=concat  run_val=False  70/15/15
+
+########## LAM_ATT = 1 ##########
+
+=== lam1 seed 0  train=220 val=47 test=48 ===
+  [seed0_abs_lam1] epoch 20/80 train=4.9459
+  [seed0_abs_lam1] epoch 40/80 train=2.5028
+  [seed0_abs_lam1] epoch 60/80 train=1.2185
+  [seed0_abs_lam1] epoch 80/80 train=1.2375
+  lam1 seed0  abs: P=0.4935 R=0.5278 F1=0.5101 attn_iou=0.2327 gap=0.2899
+
+=== lam1 seed 1  train=220 val=47 test=48 ===
+  [seed1_abs_lam1] epoch 20/80 train=4.9347
+  [seed1_abs_lam1] epoch 40/80 train=2.5861
+  [seed1_abs_lam1] epoch 60/80 train=1.2265
+  [seed1_abs_lam1] epoch 80/80 train=1.0897
+  lam1 seed1  abs: P=0.7170 R=0.6333 F1=0.6726 attn_iou=0.2662 gap=0.3139
+
+=== lam1 seed 2  train=220 val=47 test=48 ===
+  [seed2_abs_lam1] epoch 20/80 train=4.5601
+  [seed2_abs_lam1] epoch 40/80 train=1.8591
+  [seed2_abs_lam1] epoch 60/80 train=1.1238
+  [seed2_abs_lam1] epoch 80/80 train=0.9931
+  lam1 seed2  abs: P=0.9070 R=0.5652 F1=0.6964 attn_iou=0.2766 gap=0.3517
+
+=== lam1 seed 3  train=220 val=47 test=48 ===
+  [seed3_abs_lam1] epoch 20/80 train=6.0341
+  [seed3_abs_lam1] epoch 40/80 train=3.9927
+  [seed3_abs_lam1] epoch 60/80 train=2.0982
+  [seed3_abs_lam1] epoch 80/80 train=1.2321
+  lam1 seed3  abs: P=0.8250 R=0.4521 F1=0.5841 attn_iou=0.2529 gap=0.3542
+
+=== lam1 seed 4  train=220 val=47 test=48 ===
+  [seed4_abs_lam1] epoch 20/80 train=4.6509
+  [seed4_abs_lam1] epoch 40/80 train=2.2221
+  [seed4_abs_lam1] epoch 60/80 train=1.2298
+  [seed4_abs_lam1] epoch 80/80 train=1.0053
+  lam1 seed4  abs: P=0.7400 R=0.5362 F1=0.6218 attn_iou=0.2382 gap=0.3242
+
+========================================================================================================
+  config  lam_att          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
+     abs        1  0.7365±0.1388   0.5429±0.0587   0.6170±0.0662   0.2533±0.0165   0.3268±0.0241 
+========================================================================================================
+
+Saved -> /root/test/dataset3/attn_cnn_merged_final_0623_1912
+(base) root@autodl-container-a2aa4d9061-443321d3:~/test/dataset3# cd /root/test/dataset3
+(base) root@autodl-container-a2aa4d9061-443321d3:~/test/dataset3# /root/miniconda3/bin/python /root/test/dataset3/attn_cnn_merged_final.py
+Using device: cuda
+[merged] n_total=315  modes=['none', 'abs']  seeds=[0, 1, 2, 3, 4]  margin=0.5  lam_att_sweep=[0.3, 0.5, 1, 3, 5]  augment=False  fuse=concat  run_val=False  70/15/15
+
+########## LAM_ATT = 0.3 ##########
+
+=== lam0.3 seed 0  train=220 val=47 test=48 ===
+  [seed0_none_lam0.3] epoch 20/80 train=5.5736
+  [seed0_none_lam0.3] epoch 40/80 train=3.4906
+  [seed0_none_lam0.3] epoch 60/80 train=1.9342
+  [seed0_none_lam0.3] epoch 80/80 train=0.7888
+  lam0.3 seed0 none: P=0.7273 R=0.3333 F1=0.4571 attn_iou=nan gap=nan
+  [seed0_abs_lam0.3] epoch 20/80 train=6.7032
+  [seed0_abs_lam0.3] epoch 40/80 train=3.8029
+  [seed0_abs_lam0.3] epoch 60/80 train=2.2267
+  [seed0_abs_lam0.3] epoch 80/80 train=0.8759
+  lam0.3 seed0  abs: P=0.6200 R=0.4306 F1=0.5082 attn_iou=0.1960 gap=0.2400
+
+=== lam0.3 seed 1  train=220 val=47 test=48 ===
+  [seed1_none_lam0.3] epoch 20/80 train=6.2959
+  [seed1_none_lam0.3] epoch 40/80 train=4.0042
+  [seed1_none_lam0.3] epoch 60/80 train=3.1253
+  [seed1_none_lam0.3] epoch 80/80 train=1.7910
+  lam0.3 seed1 none: P=0.4688 R=0.2500 F1=0.3261 attn_iou=nan gap=nan
+  [seed1_abs_lam0.3] epoch 20/80 train=6.3655
+  [seed1_abs_lam0.3] epoch 40/80 train=3.9659
+  [seed1_abs_lam0.3] epoch 60/80 train=2.5685
+  [seed1_abs_lam0.3] epoch 80/80 train=2.0443
+  lam0.3 seed1  abs: P=0.3913 R=0.1500 F1=0.2169 attn_iou=0.2018 gap=0.2401
+
+=== lam0.3 seed 2  train=220 val=47 test=48 ===
+  [seed2_none_lam0.3] epoch 20/80 train=9.0669
+  [seed2_none_lam0.3] epoch 40/80 train=3.2211
+  [seed2_none_lam0.3] epoch 60/80 train=3.6245
+  [seed2_none_lam0.3] epoch 80/80 train=1.2244
+  lam0.3 seed2 none: P=0.6875 R=0.3188 F1=0.4356 attn_iou=nan gap=nan
+  [seed2_abs_lam0.3] epoch 20/80 train=5.0749
+  [seed2_abs_lam0.3] epoch 40/80 train=3.1901
+  [seed2_abs_lam0.3] epoch 60/80 train=1.6184
+  [seed2_abs_lam0.3] epoch 80/80 train=0.6934
+  lam0.3 seed2  abs: P=0.8148 R=0.3188 F1=0.4583 attn_iou=0.2071 gap=0.2403
+
+=== lam0.3 seed 3  train=220 val=47 test=48 ===
+  [seed3_none_lam0.3] epoch 20/80 train=6.0991
+  [seed3_none_lam0.3] epoch 40/80 train=3.7159
+  [seed3_none_lam0.3] epoch 60/80 train=2.5828
+  [seed3_none_lam0.3] epoch 80/80 train=1.1758
+  lam0.3 seed3 none: P=0.6000 R=0.2055 F1=0.3061 attn_iou=nan gap=nan
+  [seed3_abs_lam0.3] epoch 20/80 train=8.8786
+  [seed3_abs_lam0.3] epoch 40/80 train=4.9382
+  [seed3_abs_lam0.3] epoch 60/80 train=3.6945
+  [seed3_abs_lam0.3] epoch 80/80 train=3.0165
+  lam0.3 seed3  abs: P=0.1250 R=0.0274 F1=0.0449 attn_iou=0.1727 gap=0.2027
+
+=== lam0.3 seed 4  train=220 val=47 test=48 ===
+  [seed4_none_lam0.3] epoch 20/80 train=7.7569
+  [seed4_none_lam0.3] epoch 40/80 train=4.5206
+  [seed4_none_lam0.3] epoch 60/80 train=3.3485
+  [seed4_none_lam0.3] epoch 80/80 train=2.0932
+  lam0.3 seed4 none: P=0.6667 R=0.2029 F1=0.3111 attn_iou=nan gap=nan
+  [seed4_abs_lam0.3] epoch 20/80 train=5.3947
+  [seed4_abs_lam0.3] epoch 40/80 train=3.3354
+  [seed4_abs_lam0.3] epoch 60/80 train=1.7229
+  [seed4_abs_lam0.3] epoch 80/80 train=0.7268
+  lam0.3 seed4  abs: P=0.7647 R=0.3768 F1=0.5049 attn_iou=0.1883 gap=0.2240
+
+########## LAM_ATT = 0.5 ##########
+
+=== lam0.5 seed 0  train=220 val=47 test=48 ===
+  [seed0_none_lam0.5] epoch 20/80 train=5.5736
+  [seed0_none_lam0.5] epoch 40/80 train=3.4906
+  [seed0_none_lam0.5] epoch 60/80 train=1.9342
+  [seed0_none_lam0.5] epoch 80/80 train=0.7888
+  lam0.5 seed0 none: P=0.7273 R=0.3333 F1=0.4571 attn_iou=nan gap=nan
+  [seed0_abs_lam0.5] epoch 20/80 train=6.7924
+  [seed0_abs_lam0.5] epoch 40/80 train=3.9947
+  [seed0_abs_lam0.5] epoch 60/80 train=2.3736
+  [seed0_abs_lam0.5] epoch 80/80 train=1.1004
+  lam0.5 seed0  abs: P=0.5102 R=0.3472 F1=0.4132 attn_iou=0.1939 gap=0.2288
+
+=== lam0.5 seed 1  train=220 val=47 test=48 ===
+  [seed1_none_lam0.5] epoch 20/80 train=6.2959
+  [seed1_none_lam0.5] epoch 40/80 train=4.0042
+  [seed1_none_lam0.5] epoch 60/80 train=3.1253
+  [seed1_none_lam0.5] epoch 80/80 train=1.7910
+  lam0.5 seed1 none: P=0.4688 R=0.2500 F1=0.3261 attn_iou=nan gap=nan
+  [seed1_abs_lam0.5] epoch 20/80 train=6.5906
+  [seed1_abs_lam0.5] epoch 40/80 train=4.3077
+  [seed1_abs_lam0.5] epoch 60/80 train=2.9141
+  [seed1_abs_lam0.5] epoch 80/80 train=1.7197
+  lam0.5 seed1  abs: P=0.7778 R=0.2333 F1=0.3590 attn_iou=0.2006 gap=0.2405
+
+=== lam0.5 seed 2  train=220 val=47 test=48 ===
+  [seed2_none_lam0.5] epoch 20/80 train=9.0669
+  [seed2_none_lam0.5] epoch 40/80 train=3.2211
+  [seed2_none_lam0.5] epoch 60/80 train=3.6245
+  [seed2_none_lam0.5] epoch 80/80 train=1.2244
+  lam0.5 seed2 none: P=0.6875 R=0.3188 F1=0.4356 attn_iou=nan gap=nan
+  [seed2_abs_lam0.5] epoch 20/80 train=5.3399
+  [seed2_abs_lam0.5] epoch 40/80 train=3.5760
+  [seed2_abs_lam0.5] epoch 60/80 train=1.9328
+  [seed2_abs_lam0.5] epoch 80/80 train=0.8567
+  lam0.5 seed2  abs: P=0.7451 R=0.5507 F1=0.6333 attn_iou=0.2150 gap=0.2452
+
+=== lam0.5 seed 3  train=220 val=47 test=48 ===
+  [seed3_none_lam0.5] epoch 20/80 train=6.0991
+  [seed3_none_lam0.5] epoch 40/80 train=3.7159
+  [seed3_none_lam0.5] epoch 60/80 train=2.5828
+  [seed3_none_lam0.5] epoch 80/80 train=1.1758
+  lam0.5 seed3 none: P=0.6000 R=0.2055 F1=0.3061 attn_iou=nan gap=nan
+  [seed3_abs_lam0.5] epoch 20/80 train=9.1039
+  [seed3_abs_lam0.5] epoch 40/80 train=5.1319
+  [seed3_abs_lam0.5] epoch 60/80 train=3.8744
+  [seed3_abs_lam0.5] epoch 80/80 train=2.7894
+  lam0.5 seed3  abs: P=0.7500 R=0.0822 F1=0.1481 attn_iou=0.1939 gap=0.2407
+
+=== lam0.5 seed 4  train=220 val=47 test=48 ===
+  [seed4_none_lam0.5] epoch 20/80 train=7.7569
+  [seed4_none_lam0.5] epoch 40/80 train=4.5206
+  [seed4_none_lam0.5] epoch 60/80 train=3.3485
+  [seed4_none_lam0.5] epoch 80/80 train=2.0932
+  lam0.5 seed4 none: P=0.6667 R=0.2029 F1=0.3111 attn_iou=nan gap=nan
+  [seed4_abs_lam0.5] epoch 20/80 train=5.6276
+  [seed4_abs_lam0.5] epoch 40/80 train=3.5998
+  [seed4_abs_lam0.5] epoch 60/80 train=2.0104
+  [seed4_abs_lam0.5] epoch 80/80 train=0.9505
+  lam0.5 seed4  abs: P=0.8333 R=0.2899 F1=0.4301 attn_iou=0.2002 gap=0.2452
+
+########## LAM_ATT = 1 ##########
+
+=== lam1 seed 0  train=220 val=47 test=48 ===
+  [seed0_none_lam1] epoch 20/80 train=5.5736
+  [seed0_none_lam1] epoch 40/80 train=3.4906
+  [seed0_none_lam1] epoch 60/80 train=1.9342
+  [seed0_none_lam1] epoch 80/80 train=0.7888
+  lam1 seed0 none: P=0.7273 R=0.3333 F1=0.4571 attn_iou=nan gap=nan
+  [seed0_abs_lam1] epoch 20/80 train=7.2313
+  [seed0_abs_lam1] epoch 40/80 train=4.4152
+  [seed0_abs_lam1] epoch 60/80 train=2.7936
+  [seed0_abs_lam1] epoch 80/80 train=1.4044
+  lam1 seed0  abs: P=0.5192 R=0.3750 F1=0.4355 attn_iou=0.2185 gap=0.2556
+
+=== lam1 seed 1  train=220 val=47 test=48 ===
+  [seed1_none_lam1] epoch 20/80 train=6.2959
+  [seed1_none_lam1] epoch 40/80 train=4.0042
+  [seed1_none_lam1] epoch 60/80 train=3.1253
+  [seed1_none_lam1] epoch 80/80 train=1.7910
+  lam1 seed1 none: P=0.4688 R=0.2500 F1=0.3261 attn_iou=nan gap=nan
+  [seed1_abs_lam1] epoch 20/80 train=7.1290
+  [seed1_abs_lam1] epoch 40/80 train=4.6549
+  [seed1_abs_lam1] epoch 60/80 train=3.2686
+  [seed1_abs_lam1] epoch 80/80 train=2.0477
+  lam1 seed1  abs: P=0.5217 R=0.2000 F1=0.2892 attn_iou=0.2198 gap=0.2638
+
+=== lam1 seed 2  train=220 val=47 test=48 ===
+  [seed2_none_lam1] epoch 20/80 train=9.0669
+  [seed2_none_lam1] epoch 40/80 train=3.2211
+  [seed2_none_lam1] epoch 60/80 train=3.6245
+  [seed2_none_lam1] epoch 80/80 train=1.2244
+  lam1 seed2 none: P=0.6875 R=0.3188 F1=0.4356 attn_iou=nan gap=nan
+  [seed2_abs_lam1] epoch 20/80 train=5.7761
+  [seed2_abs_lam1] epoch 40/80 train=3.8133
+  [seed2_abs_lam1] epoch 60/80 train=2.3067
+  [seed2_abs_lam1] epoch 80/80 train=1.2797
+  lam1 seed2  abs: P=0.7442 R=0.4638 F1=0.5714 attn_iou=0.2112 gap=0.2320
+
+=== lam1 seed 3  train=220 val=47 test=48 ===
+  [seed3_none_lam1] epoch 20/80 train=6.0991
+  [seed3_none_lam1] epoch 40/80 train=3.7159
+  [seed3_none_lam1] epoch 60/80 train=2.5828
+  [seed3_none_lam1] epoch 80/80 train=1.1758
+  lam1 seed3 none: P=0.6000 R=0.2055 F1=0.3061 attn_iou=nan gap=nan
+  [seed3_abs_lam1] epoch 20/80 train=9.6315
+  [seed3_abs_lam1] epoch 40/80 train=5.6063
+  [seed3_abs_lam1] epoch 60/80 train=4.3588
+  [seed3_abs_lam1] epoch 80/80 train=3.4247
+  lam1 seed3  abs: P=1.0000 R=0.1096 F1=0.1975 attn_iou=0.2102 gap=0.2690
+
+=== lam1 seed 4  train=220 val=47 test=48 ===
+  [seed4_none_lam1] epoch 20/80 train=7.7569
+  [seed4_none_lam1] epoch 40/80 train=4.5206
+  [seed4_none_lam1] epoch 60/80 train=3.3485
+  [seed4_none_lam1] epoch 80/80 train=2.0932
+  lam1 seed4 none: P=0.6667 R=0.2029 F1=0.3111 attn_iou=nan gap=nan
+  [seed4_abs_lam1] epoch 20/80 train=6.1251
+  [seed4_abs_lam1] epoch 40/80 train=3.9684
+  [seed4_abs_lam1] epoch 60/80 train=2.3176
+  [seed4_abs_lam1] epoch 80/80 train=1.5446
+  lam1 seed4  abs: P=0.7037 R=0.2754 F1=0.3958 attn_iou=0.1874 gap=0.2271
+
+########## LAM_ATT = 3 ##########
+
+=== lam3 seed 0  train=220 val=47 test=48 ===
+  [seed0_none_lam3] epoch 20/80 train=5.5736
+  [seed0_none_lam3] epoch 40/80 train=3.4906
+  [seed0_none_lam3] epoch 60/80 train=1.9342
+  [seed0_none_lam3] epoch 80/80 train=0.7888
+  lam3 seed0 none: P=0.7273 R=0.3333 F1=0.4571 attn_iou=nan gap=nan
+  [seed0_abs_lam3] epoch 20/80 train=9.1064
+  [seed0_abs_lam3] epoch 40/80 train=6.0387
+  [seed0_abs_lam3] epoch 60/80 train=4.5436
+  [seed0_abs_lam3] epoch 80/80 train=2.9749
+  lam3 seed0  abs: P=0.5862 R=0.4722 F1=0.5231 attn_iou=0.2291 gap=0.2564
+
+=== lam3 seed 1  train=220 val=47 test=48 ===
+  [seed1_none_lam3] epoch 20/80 train=6.2959
+  [seed1_none_lam3] epoch 40/80 train=4.0042
+  [seed1_none_lam3] epoch 60/80 train=3.1253
+  [seed1_none_lam3] epoch 80/80 train=1.7910
+  lam3 seed1 none: P=0.4688 R=0.2500 F1=0.3261 attn_iou=nan gap=nan
+  [seed1_abs_lam3] epoch 20/80 train=9.1564
+  [seed1_abs_lam3] epoch 40/80 train=6.3230
+  [seed1_abs_lam3] epoch 60/80 train=4.6046
+  [seed1_abs_lam3] epoch 80/80 train=3.6227
+  lam3 seed1  abs: P=0.5357 R=0.2500 F1=0.3409 attn_iou=0.2342 gap=0.2602
+
+=== lam3 seed 2  train=220 val=47 test=48 ===
+  [seed2_none_lam3] epoch 20/80 train=9.0669
+  [seed2_none_lam3] epoch 40/80 train=3.2211
+  [seed2_none_lam3] epoch 60/80 train=3.6245
+  [seed2_none_lam3] epoch 80/80 train=1.2244
+  lam3 seed2 none: P=0.6875 R=0.3188 F1=0.4356 attn_iou=nan gap=nan
+  [seed2_abs_lam3] epoch 20/80 train=7.7071
+  [seed2_abs_lam3] epoch 40/80 train=5.6171
+  [seed2_abs_lam3] epoch 60/80 train=4.0032
+  [seed2_abs_lam3] epoch 80/80 train=2.8404
+  lam3 seed2  abs: P=0.6557 R=0.5797 F1=0.6154 attn_iou=0.2445 gap=0.2795
+
+=== lam3 seed 3  train=220 val=47 test=48 ===
+  [seed3_none_lam3] epoch 20/80 train=6.0991
+  [seed3_none_lam3] epoch 40/80 train=3.7159
+  [seed3_none_lam3] epoch 60/80 train=2.5828
+  [seed3_none_lam3] epoch 80/80 train=1.1758
+  lam3 seed3 none: P=0.6000 R=0.2055 F1=0.3061 attn_iou=nan gap=nan
+  [seed3_abs_lam3] epoch 20/80 train=11.6753
+  [seed3_abs_lam3] epoch 40/80 train=7.4082
+  [seed3_abs_lam3] epoch 60/80 train=6.0125
+  [seed3_abs_lam3] epoch 80/80 train=5.0438
+  lam3 seed3  abs: P=0.4615 R=0.0822 F1=0.1395 attn_iou=0.2205 gap=0.2614
+
+=== lam3 seed 4  train=220 val=47 test=48 ===
+  [seed4_none_lam3] epoch 20/80 train=7.7569
+  [seed4_none_lam3] epoch 40/80 train=4.5206
+  [seed4_none_lam3] epoch 60/80 train=3.3485
+  [seed4_none_lam3] epoch 80/80 train=2.0932
+  lam3 seed4 none: P=0.6667 R=0.2029 F1=0.3111 attn_iou=nan gap=nan
+  [seed4_abs_lam3] epoch 20/80 train=8.0420
+  [seed4_abs_lam3] epoch 40/80 train=5.7552
+  [seed4_abs_lam3] epoch 60/80 train=4.0869
+  [seed4_abs_lam3] epoch 80/80 train=2.8742
+  lam3 seed4  abs: P=0.7931 R=0.3333 F1=0.4694 attn_iou=0.2428 gap=0.3099
+
+########## LAM_ATT = 5 ##########
+
+=== lam5 seed 0  train=220 val=47 test=48 ===
+  [seed0_none_lam5] epoch 20/80 train=5.5736
+  [seed0_none_lam5] epoch 40/80 train=3.4906
+  [seed0_none_lam5] epoch 60/80 train=1.9342
+  [seed0_none_lam5] epoch 80/80 train=0.7888
+  lam5 seed0 none: P=0.7273 R=0.3333 F1=0.4571 attn_iou=nan gap=nan
+  [seed0_abs_lam5] epoch 20/80 train=11.1737
+  [seed0_abs_lam5] epoch 40/80 train=7.7529
+  [seed0_abs_lam5] epoch 60/80 train=5.9701
+  [seed0_abs_lam5] epoch 80/80 train=4.4325
+  lam5 seed0  abs: P=0.6170 R=0.4028 F1=0.4874 attn_iou=0.2567 gap=0.2942
+
+=== lam5 seed 1  train=220 val=47 test=48 ===
+  [seed1_none_lam5] epoch 20/80 train=6.2959
+  [seed1_none_lam5] epoch 40/80 train=4.0042
+  [seed1_none_lam5] epoch 60/80 train=3.1253
+  [seed1_none_lam5] epoch 80/80 train=1.7910
+  lam5 seed1 none: P=0.4688 R=0.2500 F1=0.3261 attn_iou=nan gap=nan
+  [seed1_abs_lam5] epoch 20/80 train=11.2725
+  [seed1_abs_lam5] epoch 40/80 train=8.2341
+  [seed1_abs_lam5] epoch 60/80 train=6.5497
+  [seed1_abs_lam5] epoch 80/80 train=5.1059
+  lam5 seed1  abs: P=0.6552 R=0.3167 F1=0.4270 attn_iou=0.2347 gap=0.2720
+
+=== lam5 seed 2  train=220 val=47 test=48 ===
+  [seed2_none_lam5] epoch 20/80 train=9.0669
+  [seed2_none_lam5] epoch 40/80 train=3.2211
+  [seed2_none_lam5] epoch 60/80 train=3.6245
+  [seed2_none_lam5] epoch 80/80 train=1.2244
+  lam5 seed2 none: P=0.6875 R=0.3188 F1=0.4356 attn_iou=nan gap=nan
+  [seed2_abs_lam5] epoch 20/80 train=9.5824
+  [seed2_abs_lam5] epoch 40/80 train=7.2682
+  [seed2_abs_lam5] epoch 60/80 train=5.4349
+  [seed2_abs_lam5] epoch 80/80 train=4.3071
+  lam5 seed2  abs: P=0.7727 R=0.4928 F1=0.6018 attn_iou=0.2471 gap=0.2665
+
+=== lam5 seed 3  train=220 val=47 test=48 ===
+  [seed3_none_lam5] epoch 20/80 train=6.0991
+  [seed3_none_lam5] epoch 40/80 train=3.7159
+  [seed3_none_lam5] epoch 60/80 train=2.5828
+  [seed3_none_lam5] epoch 80/80 train=1.1758
+  lam5 seed3 none: P=0.6000 R=0.2055 F1=0.3061 attn_iou=nan gap=nan
+  [seed3_abs_lam5] epoch 20/80 train=13.6690
+  [seed3_abs_lam5] epoch 40/80 train=9.1486
+  [seed3_abs_lam5] epoch 60/80 train=7.6769
+  [seed3_abs_lam5] epoch 80/80 train=6.8748
+  lam5 seed3  abs: P=0.2667 R=0.0548 F1=0.0909 attn_iou=0.2356 gap=0.2823
+
+=== lam5 seed 4  train=220 val=47 test=48 ===
+  [seed4_none_lam5] epoch 20/80 train=7.7569
+  [seed4_none_lam5] epoch 40/80 train=4.5206
+  [seed4_none_lam5] epoch 60/80 train=3.3485
+  [seed4_none_lam5] epoch 80/80 train=2.0932
+  lam5 seed4 none: P=0.6667 R=0.2029 F1=0.3111 attn_iou=nan gap=nan
+  [seed4_abs_lam5] epoch 20/80 train=9.9226
+  [seed4_abs_lam5] epoch 40/80 train=7.2762
+  [seed4_abs_lam5] epoch 60/80 train=5.6042
+  [seed4_abs_lam5] epoch 80/80 train=4.3325
+  lam5 seed4  abs: P=0.8800 R=0.3188 F1=0.4681 attn_iou=0.2440 gap=0.3068
+
+========================================================================================================
+  config  lam_att          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
+    none      0.3  0.6300±0.0906   0.2621±0.0550   0.3672±0.0653              nan             nan
+    none      0.5  0.6300±0.0906   0.2621±0.0550   0.3672±0.0653              nan             nan
+    none        1  0.6300±0.0906   0.2621±0.0550   0.3672±0.0653              nan             nan
+    none        3  0.6300±0.0906   0.2621±0.0550   0.3672±0.0653              nan             nan
+    none        5  0.6300±0.0906   0.2621±0.0550   0.3672±0.0653              nan             nan
+     abs      0.3  0.5432±0.2556   0.2607±0.1499   0.3466±0.1852   0.1932±0.0120   0.2294±0.0147 
+     abs      0.5  0.7233±0.1111   0.3007±0.1530   0.3968±0.1553   0.2007±0.0077   0.2401±0.0060 
+     abs        1  0.6978±0.1769   0.2847±0.1250   0.3779±0.1277   0.2094±0.0117   0.2495±0.0169 
+     abs        3  0.6065±0.1129   0.3435±0.1729   0.4177±0.1650   0.2342±0.0089   0.2735±0.0199 
+     abs        5  0.6383±0.2075   0.3172±0.1463   0.4150±0.1721   0.2436±0.0081   0.2844±0.0147 
+========================================================================================================

@@ -20,7 +20,7 @@
   python attn_cnn_merged_final.py --seeds 0 1 2    # 指定随机种子
   python attn_cnn_merged_final.py --augment        # 开启训练集增强（默认关闭）
 
-数据增强（开关 AUGMENT / --augment）：仅对训练集做 水平翻转(标签同步、x偏移取负)。
+数据增强（默认关闭，开关 AUGMENT / --augment）：仅对训练集做 水平翻转(标签同步、x偏移取负) + 亮度抖动。
   这是一开始的注意力版本的结果
   config          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
     none  0.7348±0.1635   0.5455±0.0235   0.6156±0.0733              nan             nan
@@ -81,7 +81,7 @@ RECT_JSON = os.path.join(IMG_DIR, "annotations_rect.json")
 MODES        = ["none", "abs", "soft"]  
 MODES        = ["abs"]  #  abs(绝对)
 SEEDS        = [0, 1, 2, 3, 4]           # 随机种子，如 [1, 2, 3, 4]
-AUGMENT      = True                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
+AUGMENT      = True                     # 训练集数据增强开关（水平翻转 + 亮度抖动），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
 RUN_VAL      = False                      # 是否每个 epoch 跑一遍 val（仅打印监控）。还没做自动选参，默认关，省时
 
@@ -531,7 +531,7 @@ def main():
     parser.add_argument("--seeds", nargs="+", type=int, default=SEEDS, help="随机种子")
     parser.add_argument("--epochs", type=int, default=num_epochs)
     parser.add_argument("--augment", action="store_true", default=AUGMENT,
-                        help="开启训练集数据增强（仅水平翻转），默认关闭")
+                        help="开启训练集数据增强（水平翻转 + 亮度抖动），默认关闭")
     parser.add_argument("--fuse", default=FUSE, choices=["gate", "concat"],
                         help="注意力融合方式：gate(乘法门控) / concat(拼接+1x1卷积)")
     parser.add_argument("--val", action="store_true", default=RUN_VAL,
