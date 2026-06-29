@@ -194,7 +194,7 @@ class HyperbolaAnnotator:
     # -------------------------------------------------- group helpers ------
     @staticmethod
     def get_group_name(filename):
-        return os.path.splitext(filename)[0].split("_")[0]
+        return os.path.splitext(filename)[0].rsplit(".", 1)[0]
 
     def get_group_members(self, filename):
         g = self.get_group_name(filename)

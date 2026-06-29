@@ -52,6 +52,7 @@ import csv
 import json
 import random
 import argparse
+import time
 from datetime import datetime
 
 import cv2
@@ -79,9 +80,10 @@ RECT_JSON = os.path.join(IMG_DIR, "annotations_rect.json")
 
 # —— 实验配置（直接改这几个；命令行 --modes / --seeds / --augment 可覆盖）——
 MODES        = ["none", "abs", "soft"]  
-MODES        = ["abs"]  #  abs(绝对)
-SEEDS        = [0, 1, 2, 3, 4]           # 随机种子，如 [1, 2, 3, 4]
-AUGMENT      = True                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
+MODES        = ["none", "abs"]  #  abs(绝对)
+SEEDS        = [10, 11, 12, 13, 14,15,16,17,18,19]           # 随机种子，如 [1, 2, 3, 4]
+TRAIN_FRACS  = [0.70]                     # 训练集占比扫描列表，如 [0.3,0.5,0.7]：逐个对比不同训练数据量；命令行 --train_fracs 可覆盖
+AUGMENT      = False                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
 RUN_VAL      = False                      # 是否每个 epoch 跑一遍 val（仅打印监控）。还没做自动选参，默认关，省时
 
@@ -90,6 +92,7 @@ HM_STRIDE    = 8                    # heatmap 下采样步长
 ATTN_STRIDE  = 4                    # 注意力图下采样步长
 HM_SIGMA     = 6                  # heatmap 高斯半径
 batch_size   = 8
+NUM_WORKERS  = 8   # DataLoader 数据加载进程数：自动按 CPU 核数（封顶 8）；设 0 关闭多进程加载
 num_epochs   = 80
 LR           = 5e-4                 # Adam 学习率
 nms_kernel   = 3
@@ -99,7 +102,7 @@ BBOX_IOU_THR = 0.5                 # 评测匹配 IoU 阈值
 BASE_CH      = 32                   # 网络通道基数
 
 # —— 注意力监督相关（调参核心）——
-LAM_ATT      = [0.5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
+LAM_ATT      = [1]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
 LAM_ATT_CUR  = 1.0                  # 占位用。。。运行时当前权重（主循环按 LAM_ATT 逐个设置；compute_loss 实际用它）
 MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
 
@@ -118,6 +121,14 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
     # 严格确定性：强制所有算子走确定性实现（遇到没有确定性实现的算子会直接报错）
     torch.use_deterministic_algorithms(True)
+
+
+def _worker_init(worker_id):
+    """DataLoader worker 初始化：关掉 OpenCV 内部多线程（避免多进程下争抢 CPU），并按 worker 重新播种保持可复现。"""
+    cv2.setNumThreads(0)
+    s = torch.initial_seed() % (2 ** 32)
+    np.random.seed(s)
+    random.seed(s)
 
 
 def make_split(n_total, seed, train_frac=0.70, val_frac=0.0):
@@ -413,16 +424,21 @@ def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, f
     tr_set = Subset(full, tr)
     if augment:
         tr_set = AugWrapper(tr_set)
+    _pin = (device.type == "cuda")           # 有 GPU 才用锁页内存 + 异步拷贝
     tl = DataLoader(tr_set, batch_size=batch_size, shuffle=True,
-                    num_workers=0, collate_fn=collate)
+                    num_workers=NUM_WORKERS, pin_memory=_pin,
+                    persistent_workers=(NUM_WORKERS > 0), worker_init_fn=_worker_init,
+                    collate_fn=collate)
     vl = (DataLoader(Subset(full, va), batch_size=batch_size, shuffle=False,
-                     num_workers=0, collate_fn=collate) if run_val else None)
+                     num_workers=NUM_WORKERS, pin_memory=_pin,
+                     persistent_workers=(NUM_WORKERS > 0), worker_init_fn=_worker_init,
+                     collate_fn=collate) if run_val else None)
     model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=use_attn, fuse=fuse).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     for ep in range(1, n_ep + 1):
         model.train(); tr_tot = 0.0
         for img, hm, wh, off, pk, band, _ in tl:
-            img, hm, wh, off, pk, band = [t.to(device) for t in (img, hm, wh, off, pk, band)]
+            img, hm, wh, off, pk, band = [t.to(device, non_blocking=_pin) for t in (img, hm, wh, off, pk, band)]
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
                 loss = compute_loss(model, img, hm, wh, off, pk, band, attn_mode)
             opt.zero_grad(); loss.backward(); opt.step()
@@ -434,7 +450,7 @@ def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, f
             model.eval(); tot = 0.0
             with torch.no_grad():
                 for img, hm, wh, off, pk, band, _ in vl:
-                    img, hm, wh, off, pk, band = [t.to(device) for t in (img, hm, wh, off, pk, band)]
+                    img, hm, wh, off, pk, band = [t.to(device, non_blocking=_pin) for t in (img, hm, wh, off, pk, band)]
                     with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
                         tot += compute_loss(model, img, hm, wh, off, pk, band, attn_mode).item()
             va_str = f" val={tot / max(len(vl), 1):.4f}"
@@ -538,6 +554,8 @@ def main():
                         help="每个 epoch 跑一遍 val 做监控打印（不参与选模型），默认关闭")
     parser.add_argument("--lam_att", nargs="+", type=float, default=LAM_ATT,
                         help="注意力 loss 权重扫描列表，如 --lam_att 0.3 0.5 2；默认取文件里的 LAM_ATT")
+    parser.add_argument("--train_fracs", nargs="+", type=float, default=TRAIN_FRACS,
+                        help="训练集占比扫描列表，如 --train_fracs 0.3 0.5 0.7；其余为 test（val=0）。默认取文件里的 TRAIN_FRACS")
     args = parser.parse_args()
 
     work = os.path.join(os.getcwd(), f"attn_cnn_merged_final_{datetime.now().strftime('%m%d_%H%M')}")
@@ -548,42 +566,70 @@ def main():
     print("Using device:", device)
     full = AttnDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
     n = len(full)
-    print(f"[merged] n_total={n}  modes={args.modes}  seeds={args.seeds}  "
-          f"margin={MARGIN}  lam_att_sweep={args.lam_att}  augment={args.augment}  fuse={args.fuse}  run_val={args.val}  70/0/30", flush=True)
+    print(f"[merged] n_total={n}  modes={args.modes}  seeds={args.seeds}  train_fracs={args.train_fracs}  "
+          f"margin={MARGIN}  lam_att_sweep={args.lam_att}  augment={args.augment}  fuse={args.fuse}  run_val={args.val}", flush=True)
+
+    # none 不用注意力 loss，与 LAM_ATT 无关 → 每个 (frac, seed) 只训一次（lam 记为 "-"）；
+    # abs/soft 才需要对每个 lam 各训一次。
+    attn_modes = [m for m in args.modes if m != "none"]
+    run_none   = ("none" in args.modes)
 
     rows = []
-    for lam in args.lam_att:
-        LAM_ATT_CUR = lam                   # compute_loss 读这个全局，改它即可换注意力权重
-        print(f"\n########## LAM_ATT = {lam} ##########", flush=True)
+    for frac in args.train_fracs:
+        print(f"\n■■■■■■■■■■ TRAIN_FRAC = {frac} ■■■■■■■■■■", flush=True)
         for seed in args.seeds:
-            tr, va, te = make_split(n, seed, train_frac=0.70, val_frac=0.0)
-            print(f"\n=== lam{lam} seed {seed}  train={len(tr)} val={len(va)} test={len(te)} (70/0/30) ===", flush=True)
-            for attn_mode in args.modes:
-                tag = f"seed{seed}_{attn_mode}_lam{lam}"
-                model = train_model(attn_mode, full, tr, va, args.epochs, work, tag, seed,
+            tr, va, te = make_split(n, seed, train_frac=frac, val_frac=0.0)
+            te_pct = int(round((1.0 - frac) * 100))
+            print(f"\n=== frac{frac} seed {seed}  train={len(tr)} val={len(va)} test={len(te)} "
+                  f"({int(round(frac*100))}/0/{te_pct}) ===", flush=True)
+
+            if run_none:                        # none：lam 无关，只跑一次
+                t0 = time.perf_counter()
+                tag = f"frac{frac}_seed{seed}_none"
+                model = train_model("none", full, tr, va, args.epochs, work, tag, seed,
                                      augment=args.augment, fuse=args.fuse, run_val=args.val)
                 m = evaluate(model, full, te)
                 gap = attn_gap(model, full, te)
-                print(f"  lam{lam} seed{seed} {attn_mode:>4}: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
-                      f"F1={m['bbox_F1']:.4f} attn_iou={m['attn_band_iou']:.4f} gap={gap:.4f}", flush=True)
-                rows.append({"seed": seed, "config": attn_mode, "lam_att": lam,
+                print(f"  frac{frac} seed{seed} none: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
+                      f"F1={m['bbox_F1']:.4f} attn_iou={m['attn_band_iou']:.4f} gap={gap:.4f}  "
+                      f"[{time.perf_counter() - t0:.1f}s]", flush=True)
+                rows.append({"train_frac": frac, "seed": seed, "config": "none", "lam_att": "-",
                              "bbox_P": m["bbox_P"], "bbox_R": m["bbox_R"], "bbox_F1": m["bbox_F1"],
                              "attn_band_iou": m["attn_band_iou"], "attn_gap": gap})
 
+            for lam in args.lam_att:            # abs/soft：每个 lam 各训一次
+                LAM_ATT_CUR = lam               # compute_loss 读这个全局，改它即可换注意力权重
+                for attn_mode in attn_modes:
+                    t0 = time.perf_counter()
+                    tag = f"frac{frac}_seed{seed}_{attn_mode}_lam{lam}"
+                    model = train_model(attn_mode, full, tr, va, args.epochs, work, tag, seed,
+                                         augment=args.augment, fuse=args.fuse, run_val=args.val)
+                    m = evaluate(model, full, te)
+                    gap = attn_gap(model, full, te)
+                    print(f"  frac{frac} lam{lam} seed{seed} {attn_mode:>4}: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
+                          f"F1={m['bbox_F1']:.4f} attn_iou={m['attn_band_iou']:.4f} gap={gap:.4f}  "
+                          f"[{time.perf_counter() - t0:.1f}s]", flush=True)
+                    rows.append({"train_frac": frac, "seed": seed, "config": attn_mode, "lam_att": lam,
+                                 "bbox_P": m["bbox_P"], "bbox_R": m["bbox_R"], "bbox_F1": m["bbox_F1"],
+                                 "attn_band_iou": m["attn_band_iou"], "attn_gap": gap})
+
     keys = ["bbox_P", "bbox_R", "bbox_F1", "attn_band_iou", "attn_gap"]
-    print("\n" + "=" * 104)
-    print(f"{'config':>8}{'lam_att':>9}" + "".join(f"{k:>16}" for k in keys))
-    for cfg in args.modes:
-        for lam in args.lam_att:
-            sub = [r for r in rows if r["config"] == cfg and r["lam_att"] == lam]
-            if not sub:
-                continue
-            line = f"{cfg:>8}{lam:>9}"
-            for k in keys:
-                vals = [r[k] for r in sub if not (isinstance(r[k], float) and np.isnan(r[k]))]
-                line += f"{np.mean(vals):>8.4f}±{np.std(vals):<7.4f}" if vals else f"{'nan':>16}"
-            print(line)
-    print("=" * 104)
+    print("\n" + "=" * 113)
+    print(f"{'frac':>6}{'config':>8}{'lam_att':>9}" + "".join(f"{k:>16}" for k in keys))
+    for frac in args.train_fracs:
+        for cfg in args.modes:
+            # none 只有一行（lam="-"）；abs/soft 按 lam 逐行
+            lam_list = ["-"] if cfg == "none" else args.lam_att
+            for lam in lam_list:
+                sub = [r for r in rows if r["train_frac"] == frac and r["config"] == cfg and r["lam_att"] == lam]
+                if not sub:
+                    continue
+                line = f"{frac:>6}{cfg:>8}{str(lam):>9}"
+                for k in keys:
+                    vals = [r[k] for r in sub if not (isinstance(r[k], float) and np.isnan(r[k]))]
+                    line += f"{np.mean(vals):>8.4f}±{np.std(vals):<7.4f}" if vals else f"{'nan':>16}"
+                print(line)
+    print("=" * 113)
 
     with open(os.path.join(work, "merged_results.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
