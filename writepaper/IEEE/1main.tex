@@ -130,12 +130,12 @@ Here, \emph{024.jpg} denotes the image filename, and the remaining entries repre
 \subsection{Hyperbola detection nerual network}
 %因为我们的形状是双曲线，目前大多数的识别的任务默认是方框，不适用于我们的任务，因此我们构建了一个为此任务设计的神经网络。
 
-\begin{figure*}
-\centering
-\includegraphics[width=1\linewidth]{unet.pdf}
-\caption{unet}
-\label{fig:unet}
-\end{figure*}
+% \begin{figure*}
+% \centering
+% \includegraphics[width=1\linewidth]{unet.pdf}
+% \caption{unet}
+% \label{fig:unet}
+% \end{figure*}
 
 
 \section{Experiment}
@@ -166,16 +166,16 @@ The dataset consists of labeled GPR B-scan images collected from real urban and 
 \begin{table*}[]
 \centering
 \caption{Detection performance (mean $\pm$ std over 10 seeds) at different
-training-data fractions. ``abs'' uses the attention constraint with
-$\lambda_{\mathrm{att}}=0.7$.}
+training-data ratios. ``Ours'' uses the attention constraint with
+$\lambda_{\mathrm{att}}=0.7$. The best F1 per row is shown in \textbf{bold}.}
 \label{tab:bbox_results}
 \setlength{\tabcolsep}{4pt}
 \renewcommand{\arraystretch}{1.2}
 \begin{tabular}{c ccc ccc}
 \toprule
-\multirow{2}{*}{\textbf{Frac.}} &
-\multicolumn{3}{c}{\textbf{none}} &
-\multicolumn{3}{c}{\textbf{abs} ($\lambda{=}0.7$)} \\
+\multirow{2}{*}{\textbf{Training ratio}} &
+\multicolumn{3}{c}{\textbf{Baseline}} &
+\multicolumn{3}{c}{\textbf{Ours} ($\lambda{=}0.7$)} \\
 \cmidrule(lr){2-4} \cmidrule(lr){5-7}
  & \textbf{P} & \textbf{R} & \textbf{F1}
  & \textbf{P} & \textbf{R} & \textbf{F1} \\
@@ -194,10 +194,26 @@ $\lambda_{\mathrm{att}}=0.7$.}
 \end{tabular}
 \end{table*}
 
-
+%加上可视化的比较 他漏掉了什么 我们对了什么
 \subsection{Result2}
 %和其他注意力机制比较  ok
-
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lccc}
+\hline
+config & bbox\_P & bbox\_R & bbox\_F1 \\
+\hline
+None    & 0.843\,$\pm$\,0.223 & 0.821\,$\pm$\,0.071 & 0.811\,$\pm$\,0.159 \\
+se       & $0.8559\pm0.1948$ & $0.8164\pm0.0417$ & $0.8205\pm0.1123$ \\
+cbam     & $0.7478\pm0.1649$ & $0.8186\pm0.0290$ & $0.7709\pm0.0966$ \\
+nonlocal & $0.8438\pm0.2818$ & $0.7361\pm0.2245$ & $0.7825\pm0.2510$ \\
+coord    & $0.8017\pm0.2339$ & $0.8355\pm0.0904$ & $0.7979\pm0.1722$ \\
+Ours     & 0.909\,$\pm$\,0.122 & 0.882\,$\pm$\,0.041 & \textbf{0.890\,$\pm$\,0.069} \\
+\hline
+\end{tabular}
+\caption{Comparison of detection performance with different attention modules}
+\label{tab:attention_comparison}
+\end{table}
 \subsection{Result3}
 %在其他的识别框架中也有效 和centernet框架比较嘛
 
@@ -215,7 +231,9 @@ $\lambda_{\mathrm{att}}=0.7$.}
 \subsection{Result3}
 %软性的约束是不是可能会更加好 如果lam参数调节好的话
 \section{Discussion}
+%讨论为什么不直接预测双曲线--面前主流的任务还是用bbox
 
+%未来的工作是对双曲线进行预测，并且输出各种参数用于反演
 
 
 \section*{Acknowledgments}
