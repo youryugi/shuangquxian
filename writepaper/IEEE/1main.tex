@@ -12,6 +12,13 @@
 \usepackage{cite}
 \usepackage{booktabs}
 \usepackage{multirow}
+
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage[margin=1in]{geometry}
+
+% indicator function
+\newcommand{\ind}{\mathbb{1}}
 \hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
 % updated with editorial comments 8/9/2021
 
@@ -128,14 +135,144 @@ Here, \emph{024.jpg} denotes the image filename, and the remaining entries repre
 \end{figure*}
 
 \subsection{Hyperbola detection nerual network}
-%因为我们的形状是双曲线，目前大多数的识别的任务默认是方框，不适用于我们的任务，因此我们构建了一个为此任务设计的神经网络。
+% =====================================================================
+%  HyperbolaNet -- Method section (English, with formulas)
+%  Compile standalone to preview the equations, or copy the body
+%  (from \section{Method} onward) into your paper.
+%  Replace the % TODO cite markers with your bibliography keys.
+% =====================================================================
 
-% \begin{figure*}
-% \centering
-% \includegraphics[width=1\linewidth]{unet.pdf}
-% \caption{unet}
-% \label{fig:unet}
-% \end{figure*}
+
+\section{Method}
+\begin{figure}
+\centering
+\includegraphics[width=1\linewidth]{11.png}
+\caption{11}
+\label{fig:11}
+\end{figure}
+\subsection{Overview}
+Given a single-channel GPR B-scan $I \in \mathbb{R}^{1\times H\times W}$ (here $H=W=640$),
+HyperbolaNet predicts a set of axis-aligned bounding boxes enclosing the hyperbolic
+reflections. The network comprises three parts: a convolutional encoder backbone,
+a \emph{supervised attention branch}, and a YOLO-style detection head.
+The central contribution is the attention branch, whose attention map is explicitly
+supervised by a rasterized hyperbola band mask \emph{inside the backbone}, and is then
+injected into the bottleneck feature by channel concatenation. An overview is shown in
+Fig.~\ref{fig:arch}.
+
+\subsection{Encoder backbone}
+The encoder consists of three down-sampling stages followed by a bottleneck. Each stage is
+a convolutional block---two $3 \times 3$ convolutions, each followed by batch normalization (BN)
+and ReLU---followed by $2 \times 2$ max pooling, so that the channel depth doubles and the
+spatial resolution halves at each stage. The resulting feature dimensions
+($\text{channels} \times H \times W$) are
+$1 \times 640 \times 640$, $32 \times 320 \times 320$, $64 \times 160 \times 160$,
+$128 \times 160 \times 160$, and $256 \times 80 \times 80$ at the bottleneck.
+We denote by $f_3 \in \mathbb{R}^{C_3 \times \frac{H}{4} \times \frac{W}{4}}$ the output of
+the third stage \emph{before} its pooling ($C_3 = 128$, stride $4$), and by
+$F_b \in \mathbb{R}^{C_b \times \frac{H}{8} \times \frac{W}{8}}$ the bottleneck feature
+($C_b = 256$, stride $8$). The attention branch taps $f_3$ rather than $F_b$ because it
+retains a higher spatial resolution.
+
+\subsection{Supervised attention branch}
+
+\paragraph{Attention map.}
+A lightweight head $g_a(\cdot)$---a $3 \times 3$ convolution with BN and ReLU followed by a
+$1 \times 1$ convolution---maps $f_3$ to a single-channel logit $z = g_a(f_3)$, and a sigmoid
+$\sigma(\cdot)$ yields the attention map
+\begin{equation}
+A = \sigma\big(g_a(f_3)\big) \in (0,1)^{\,1 \times \frac{H}{4} \times \frac{W}{4}} .
+\end{equation}
+
+\paragraph{Band-mask construction.}
+For each annotated hyperbola, parameterized by its vertex $(x_v,y_v)$, width $w$, height $h$,
+and thickness $t$, we rasterize a ground-truth band mask. The central curve is the parabola
+\begin{equation}
+y_c(x) = y_v + h \left(\frac{x-x_v}{w/2}\right)^{2},
+\qquad x \in \left[\, x_v-\tfrac{w}{2},\; x_v+\tfrac{w}{2} \,\right],
+\end{equation}
+and the band is the set of pixels within a vertical distance $t/2$ of this curve,
+\begin{equation}
+B(x,y) = \ind\left[\, \big| y - y_c(x) \big| \le \tfrac{t}{2} \,\right] .
+\end{equation}
+The per-image mask is the union over all hyperbolae in the image, down-sampled to the
+resolution of $A$ and binarized.
+
+\paragraph{Attention loss.}
+The attention map is supervised to match $B$ pixel-wise using a combination of binary
+cross-entropy and a Dice term. With $A_i, B_i \in [0,1]$ the values at pixel $i$, $N$ the
+number of pixels, and a small constant $\epsilon$,
+\begin{align}
+\mathcal{L}_{\mathrm{bce}}
+  &= -\frac{1}{N}\sum_{i}\Big[\, B_i \log A_i + (1-B_i)\log(1-A_i) \,\Big], \\[2pt]
+\mathcal{L}_{\mathrm{dice}}
+  &= 1 - \frac{2\sum_i A_i B_i}{\sum_i A_i + \sum_i B_i + \epsilon}, \\[2pt]
+\mathcal{L}_{\mathrm{att}}
+  &= \mathcal{L}_{\mathrm{bce}} + \mathcal{L}_{\mathrm{dice}} .
+\end{align}
+Crucially, this supervision is applied to a feature map \emph{within the backbone}, not to
+the detection head, so it steers the encoder to concentrate its response on the hyperbola
+band region.
+
+\subsection{Attention-guided fusion}
+To inject the attention prior into the detection pathway, $A$ is average-pooled by a factor
+of two to align with the bottleneck resolution,
+$\tilde{A} = \mathrm{AvgPool}_{2}(A) \in (0,1)^{\,1 \times \frac{H}{8} \times \frac{W}{8}}$,
+concatenated with $F_b$ along the channel axis, and reduced back to $C_b$ channels by a
+$1 \times 1$ convolution $\phi(\cdot)$ (with BN and ReLU):
+\begin{equation}
+\hat{F} = \phi\big( [\, F_b \,;\, \tilde{A} \,] \big)
+        \in \mathbb{R}^{\,C_b \times \frac{H}{8} \times \frac{W}{8}} ,
+\end{equation}
+where $[\, \cdot \,;\, \cdot \,]$ denotes channel concatenation (yielding $C_b + 1$ channels).
+
+\subsection{Detection head and decoding}
+Three parallel heads operate on $\hat{F}$ at stride $s = 8$ over an
+$\frac{H}{s} \times \frac{W}{s}$ grid: an objectness head producing logits $O$, a size head
+producing normalized width/height $\hat{S} \in (0,1)^{2}$ (sigmoid-activated), and an offset
+head producing sub-cell center offsets $\hat{D} \in \mathbb{R}^{2}$. For each grid cell
+$(i,j)$ whose objectness $\sigma(O_{ij})$ exceeds a threshold $\tau$, the box center and size
+in image coordinates are
+\begin{align}
+c_x &= \big(j + \mathrm{clip}(\hat{D}^{x}_{ij},-0.5,0.5)\big)\, s, &
+c_y &= \big(i + \mathrm{clip}(\hat{D}^{y}_{ij},-0.5,0.5)\big)\, s, \\
+b_w &= \hat{S}^{w}_{ij}\, W, & b_h &= \hat{S}^{h}_{ij}\, H,
+\end{align}
+giving the box $[\, c_x - \tfrac{b_w}{2},\; c_y - \tfrac{b_h}{2},\; c_x + \tfrac{b_w}{2},\;
+c_y + \tfrac{b_h}{2} \,]$. Overlapping candidates are removed by box-level IoU
+non-maximum suppression.
+
+\subsection{Training objective}
+Let $P \in \{0,1\}$ be the hard objectness target ($P_{ij} = 1$ at the cell containing an
+object center, $0$ otherwise), $N_{+} = \max(\sum_{ij} P_{ij}, 1)$,
+$N_{-} = \max(\sum_{ij}(1 - P_{ij}), 1)$, and
+$\ell_{ij} = \mathrm{BCE}(O_{ij}, P_{ij})$ the per-cell objectness loss. The objectness
+term balances positives and negatives separately,
+\begin{equation}
+\mathcal{L}_{\mathrm{obj}}
+  = \frac{1}{N_{+}}\sum_{ij} P_{ij}\, \ell_{ij}
+  \;+\; \lambda_{\mathrm{noobj}}\, \frac{1}{N_{-}}\sum_{ij}(1 - P_{ij})\, \ell_{ij},
+\end{equation}
+and the size and offset terms are masked $L_1$ losses evaluated only at positive cells,
+\begin{equation}
+\mathcal{L}_{\mathrm{size}}
+  = \frac{1}{N_{+}}\sum_{ij} P_{ij}\, \big\lVert \hat{S}_{ij} - S^{*}_{ij} \big\rVert_1,
+\qquad
+\mathcal{L}_{\mathrm{off}}
+  = \frac{1}{N_{+}}\sum_{ij} P_{ij}\, \big\lVert \hat{D}_{ij} - D^{*}_{ij} \big\rVert_1,
+\end{equation}
+where $S^{*}$ and $D^{*}$ are the ground-truth normalized size and sub-cell offset. The full
+training objective is
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\mathrm{obj}} + \mathcal{L}_{\mathrm{size}}
+            + \mathcal{L}_{\mathrm{off}} + \lambda_{\mathrm{att}}\, \mathcal{L}_{\mathrm{att}},
+\end{equation}
+with $\lambda_{\mathrm{noobj}} = 0.5$ and $\lambda_{\mathrm{att}}$ a weight that balances the
+attention supervision against the detection terms. Only the attention loss
+$\mathcal{L}_{\mathrm{att}}$ is added when the supervised branch is enabled; the baseline
+without attention sets $\lambda_{\mathrm{att}} = 0$ and removes the branch.
+
+
 
 
 \section{Experiment}
@@ -197,22 +334,22 @@ $\lambda_{\mathrm{att}}=0.7$. The best F1 per row is shown in \textbf{bold}.}
 %加上可视化的比较 他漏掉了什么 我们对了什么
 \subsection{Result2}
 %和其他注意力机制比较  ok
-\begin{table}[htbp]
+\begin{table}[!t]
+\caption{Comparison of Detection Performance with Different Attention Modules}
+\label{tab:attention_comparison}
 \centering
 \begin{tabular}{lccc}
-\hline
-config & bbox\_P & bbox\_R & bbox\_F1 \\
-\hline
-None    & 0.843\,$\pm$\,0.223 & 0.821\,$\pm$\,0.071 & 0.811\,$\pm$\,0.159 \\
-se       & $0.8559\pm0.1948$ & $0.8164\pm0.0417$ & $0.8205\pm0.1123$ \\
-cbam     & $0.7478\pm0.1649$ & $0.8186\pm0.0290$ & $0.7709\pm0.0966$ \\
-nonlocal & $0.8438\pm0.2818$ & $0.7361\pm0.2245$ & $0.7825\pm0.2510$ \\
-coord    & $0.8017\pm0.2339$ & $0.8355\pm0.0904$ & $0.7979\pm0.1722$ \\
-Ours     & 0.909\,$\pm$\,0.122 & 0.882\,$\pm$\,0.041 & \textbf{0.890\,$\pm$\,0.069} \\
-\hline
+\toprule
+Config & Precision & Recall & F1-score \\
+\midrule
+None      & $0.843 \pm 0.223$ & $0.821 \pm 0.071$ & $0.811 \pm 0.159$ \\
+SE        & $0.856 \pm 0.195$ & $0.816 \pm 0.042$ & $0.821 \pm 0.112$ \\
+CBAM      & $0.748 \pm 0.165$ & $0.819 \pm 0.029$ & $0.771 \pm 0.097$ \\
+Non-local & $0.844 \pm 0.282$ & $0.736 \pm 0.225$ & $0.783 \pm 0.251$ \\
+Coord     & $0.802 \pm 0.234$ & $0.836 \pm 0.090$ & $0.798 \pm 0.172$ \\
+\textbf{Ours} & $\mathbf{0.909 \pm 0.122}$ & $\mathbf{0.882 \pm 0.041}$ & $\mathbf{0.890 \pm 0.069}$ \\
+\bottomrule
 \end{tabular}
-\caption{Comparison of detection performance with different attention modules}
-\label{tab:attention_comparison}
 \end{table}
 \subsection{Result3}
 %在其他的识别框架中也有效 和centernet框架比较嘛
@@ -225,7 +362,12 @@ Ours     & 0.909\,$\pm$\,0.122 & 0.882\,$\pm$\,0.041 & \textbf{0.890\,$\pm$\,0.0
 
 \subsection{Result3}
 %参数敏感性分析 lam 从0.1开始嘛 ok
-
+\begin{figure}
+\centering
+\includegraphics[width=1\linewidth]{boxplot_f1_none_vs_abs_lam.pdf}
+\caption{lambda}
+\label{fig:lambda}
+\end{figure}
 
 
 \subsection{Result3}

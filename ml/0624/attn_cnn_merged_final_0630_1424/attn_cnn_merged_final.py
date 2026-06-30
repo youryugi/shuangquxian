@@ -1,34 +1,51 @@
 """
-自己完结・单文件版（VGG-16 主干版）：
-  YOLO 网格(anchor-free) 矩形框检测头 + 显式注意力监督（双曲线带 mask 监督注意力图）。
-  本文件由 attn_cnn_yolo_final.py 改造而来，**唯一的核心区别是把自定义的 U-Net 风编码器
-  （DownBlock×3 + bottleneck）整体替换成 torchvision 的 VGG-16 作为训练/特征提取网络**。
-  其余（YOLO 风格检测、注意力 none/abs/soft、数据集、训练、评估、划分）全部保持不变。
+自己完结・单文件版：CenterNet 检测头 + 显式注意力监督（双曲线带 mask 监督注意力图）。
+把 0616-1.py / attn_cnn.py / attn_cnn_relative.py 中本实验需要的部分全部合并到这一个文件，
+不再 import 其它脚本。
 
-【VGG-16 主干如何接到原来的检测/注意力 head】
-  原网络有两个关键特征点：
-    - f3        : stride 4（160×160），喂给注意力 head（ATTN_STRIDE=4 对齐 band）
-    - bottleneck: stride 8（ 80× 80），喂给 heatmap/wh/offset 检测 head（HM_STRIDE=8）
-  VGG-16 features 各 block：
-    block1(conv64×2)+pool -> stride 2
-    block2(conv128×2)+pool -> stride 4  (128 通道) ← 取它当 f3 给注意力
-    block3(conv256×3)+pool -> stride 8  (256 通道) ← 取它当 bottleneck 给检测
-    block4/5 不使用（stride 16/32，分辨率太低，本任务用不到）。
-  因此：注意力 head 输入 = 128 通道，检测 head 输入 mid = 256 通道。
+【与 attn_cnn_merged.py 的区别】
+  本版本**直接用最终 epoch 的模型**做推理评估，不再按 val loss 挑选 best、也不回滚。
+  每个 epoch 仍会跑一遍 val 但只用于打印监控；训练结束保存 {tag}_final.pth。
 
-【输入通道】数据集是单通道灰度图；VGG 第一层要 3 通道，forward 里把灰度复制成 3 通道再喂入。
-【预训练】默认加载 ImageNet 预训练权重（--no-pretrained 可关闭，离线环境请关闭）。
+三种注意力模式作为参数（--modes 选择，默认三种全跑）：
+  none : 无注意力        —— 纯 CenterNet，不加注意力 head / 不加注意力 loss
+  abs  : abs 注意力      —— A(x) ≈ band mask 绝对逐像素匹配（BCE + Dice）
+  soft : 软（相对）注意力 —— 只要求 带内均值 − 带外均值 ≥ margin 的 margin-hinge 软约束
+                            （原 attn_cnn_relative.py 的 "rel"，相对约束、对边界误差几乎免疫）
 
-【检测风格：YOLO 网格 anchor-free】
-  - 监督：objectness 用「硬」目标——只有 GT 框中心所在的网格单元 = 1，其余 = 0；obj/noobj 平衡 BCE。
-  - 解码：sigmoid(objectness) ≥ 阈值的单元 → 解码出框 → 框级 IoU-NMS。
-  - 直接用最终 epoch 的模型做推理评估（不按 val 挑 best、不回滚），训练结束保存 {tag}_final.pth。
+用法：
+  python attn_cnn_merged_final.py                  # 跑 none / abs / soft 三种
+  python attn_cnn_merged_final.py --modes soft     # 只跑软注意力
+  python attn_cnn_merged_final.py --modes abs soft # 跑 abs + soft
+  python attn_cnn_merged_final.py --seeds 0 1 2    # 指定随机种子
+  python attn_cnn_merged_final.py --augment        # 开启训练集增强（默认关闭）
 
-三种注意力模式（--modes 选择）：
-  none : 无注意力（不加注意力 head / 不加注意力 loss）
-  abs  : abs 注意力（A(x) ≈ band mask 绝对逐像素匹配，BCE + Dice）
-  soft : 软（相对）注意力（带内均值 − 带外均值 ≥ margin 的 margin-hinge 软约束）
-"""
+数据增强（开关 AUGMENT / --augment）：仅对训练集做 水平翻转(标签同步、x偏移取负)。
+  这是一开始的注意力版本的结果
+  config          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
+    none  0.7348±0.1635   0.5455±0.0235   0.6156±0.0733              nan             nan
+     abs  0.7632±0.1198   0.5225±0.0899   0.6127±0.0770   0.2044±0.0154   0.2538±0.0288 
+    soft  0.7332±0.0818   0.5014±0.0822   0.5895±0.0583   0.1484±0.0104   0.4075±0.0303 
+
+ 改成concat 此时lam att是1  ================================================================================================
+  config          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
+     abs  0.7770±0.1249   0.5172±0.0333   0.6147±0.0413   0.2584±0.0136   0.3296±0.0174 
+================================================================================================
+========================================================================================================
+  config  lam_att          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
+     abs      0.3  0.6545±0.1021   0.5799±0.0305   0.6107±0.0482   0.2214±0.0176   0.2818±0.0292 
+     abs      0.5  0.6696±0.1181   0.5940±0.0410   0.6270±0.0748   0.2393±0.0177   0.3032±0.0283 
+     abs        2  0.6960±0.0792   0.6602±0.0745   0.6697±0.0217   0.2754±0.0220   0.3421±0.0382 
+========================================================================================================
+  config  lam_att          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
+     abs        1  0.6864±0.1312   0.6030±0.0412   0.6343±0.0682   0.2584±0.0136   0.3296±0.0174 
+
+  水平翻转增强
+  然后
+  config  lam_att          bbox_P          bbox_R         bbox_F1   attn_band_iou        attn_gap
+    none        1  0.5740±0.1168   0.4822±0.0654   0.5157±0.0589              nan             nan
+     abs        1  0.6367±0.0371   0.5753±0.0528   0.6027±0.0337   0.2500±0.0134   0.3193±0.0294      
+     """
 import os
 import re
 import csv
@@ -48,7 +65,6 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
 from torch.utils.data import DataLoader, Subset, Dataset
 
 
@@ -63,33 +79,30 @@ HYP_JSON  = os.path.join(IMG_DIR, "annotations.json")
 RECT_JSON = os.path.join(IMG_DIR, "annotations_rect.json")
 
 # —— 实验配置（直接改这几个；命令行 --modes / --seeds / --augment 可覆盖）——
-MODES        = ["none", "abs", "soft"]
-MODES        = ["none","abs"]  #  abs(绝对)
-SEEDS        = [0, 1, 2, 3, 4]           # 随机种子，如 [1, 2, 3, 4]
-TRAIN_FRACS  = [0.80]                     # 训练集占比扫描列表，如 [0.3,0.5,0.7]：逐个训练对比不同训练数据量；命令行 --train_fracs 可覆盖
+MODES        = ["none", "abs", "soft"]  
+MODES        = ["none", "abs"]  #  abs(绝对)
+SEEDS        = [10, 11, 12, 13, 14,15,16,17,18,19]           # 随机种子，如 [1, 2, 3, 4]
+TRAIN_FRACS  = [0.80]                     # 训练集占比扫描列表，如 [0.3,0.5,0.7]：逐个对比不同训练数据量；命令行 --train_fracs 可覆盖
 AUGMENT      = False                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
 RUN_VAL      = False                      # 是否每个 epoch 跑一遍 val（仅打印监控）。还没做自动选参，默认关，省时
-VGG_PRETRAINED = True                   # VGG-16 是否加载 ImageNet 预训练权重（离线环境改 False / 用 --no-pretrained）
 
 input_size   = (640, 640)
 HM_STRIDE    = 8                    # heatmap 下采样步长
 ATTN_STRIDE  = 4                    # 注意力图下采样步长
 HM_SIGMA     = 6                  # heatmap 高斯半径
 batch_size   = 8
-NUM_WORKERS  = min(os.cpu_count() or 1, 8)   # DataLoader 数据加载进程数：自动按 CPU 核数（封顶 8）；设 0 关闭多进程加载
+NUM_WORKERS  = 8   # DataLoader 数据加载进程数：自动按 CPU 核数（封顶 8）；设 0 关闭多进程加载
 num_epochs   = 80
 LR           = 5e-4                 # Adam 学习率
-nms_kernel   = 3                   # （YOLO 风格不再用热图 maxpool-NMS，此项无效，保留兼容）
+nms_kernel   = 3
 max_det      = 5
-HM_THRESH    = 0.9                  # YOLO：objectness 解码阈值（sigmoid(obj) ≥ 此值才算候选；扫描显示 0.9~0.97 最佳）
+HM_THRESH    = 0.3                # 解码峰值阈值
 BBOX_IOU_THR = 0.5                 # 评测匹配 IoU 阈值
-NMS_IOU_THR  = 0.5                 # YOLO 解码：框级 IoU-NMS 阈值（IoU ≥ 此值的低分框被抑制）
-LAM_NOOBJ    = 0.5                 # YOLO：objectness 损失中 noobj(背景) 项权重，平衡正负样本
-BASE_CH      = 32                   # （VGG 主干自带固定通道数，此项保留兼容，网络不再使用）
+BASE_CH      = 32                   # 网络通道基数
 
 # —— 注意力监督相关（调参核心）——
-LAM_ATT      = [0.3,0.5,1,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
+LAM_ATT      = [1]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
 LAM_ATT_CUR  = 1.0                  # 占位用。。。运行时当前权重（主循环按 LAM_ATT 逐个设置；compute_loss 实际用它）
 MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
 
@@ -180,17 +193,6 @@ def _heatmap_nms(hm, kernel):
     tmax = F.max_pool2d(t, kernel, stride=1, padding=kernel // 2)
     keep = (t == tmax).squeeze(0).squeeze(0).numpy()
     return hm * keep
-
-
-def nms_iou(boxes, scores, iou_thr):
-    """YOLO 风格框级 NMS：按分数降序，抑制与已保留框 IoU ≥ 阈值的框。返回保留的索引。"""
-    order = sorted(range(len(boxes)), key=lambda i: -scores[i])
-    keep = []
-    while order:
-        i = order.pop(0)
-        keep.append(i)
-        order = [j for j in order if bbox_iou(boxes[i], boxes[j]) < iou_thr]
-    return keep
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -293,44 +295,44 @@ class AugWrapper(Dataset):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. 模型（VGG-16 主干）
+# 3. 模型
 # ══════════════════════════════════════════════════════════════════════════════
-class VGG16Backbone(nn.Module):
-    """VGG-16 编码器：输出两个特征
-        f_s4 : stride 4（128 通道，VGG block2 池化输出）→ 给注意力 head
-        f_s8 : stride 8（256 通道，VGG block3 池化输出）→ 给 heatmap/wh/offset 检测 head
-    单通道灰度输入会在 forward 内复制成 3 通道以匹配 VGG 第一层。
-    """
-    def __init__(self, pretrained=True):
+class ConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
         super().__init__()
-        weights = torchvision.models.VGG16_Weights.IMAGENET1K_V1 if pretrained else None
-        feats = torchvision.models.vgg16(weights=weights).features
-        # features 索引：0-4 block1+pool(stride2) | 5-9 block2+pool(stride4,128) | 10-16 block3+pool(stride8,256)
-        self.stage_s4 = feats[0:10]    # 到 block2 的 maxpool（含）→ stride4, 128 通道
-        self.stage_s8 = feats[10:17]   # block3 conv×3 + maxpool      → stride8, 256 通道
-        self.out_ch_s4 = 128
-        self.out_ch_s8 = 256
+        self.block = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch), nn.ReLU(inplace=True),
+        )
+    def forward(self, x): return self.block(x)
 
+
+class DownBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv = ConvBlock(in_ch, out_ch)
+        self.pool = nn.MaxPool2d(2)
     def forward(self, x):
-        if x.shape[1] == 1:
-            x = x.repeat(1, 3, 1, 1)        # 灰度 → 3 通道
-        f_s4 = self.stage_s4(x)            # stride4, 128
-        f_s8 = self.stage_s8(f_s4)         # stride8, 256
-        return f_s4, f_s8
+        feat = self.conv(x)
+        return feat, self.pool(feat)
 
 
 class AttnBBoxNet(nn.Module):
-    def __init__(self, in_ch=1, base_ch=32, use_attn=True, fuse="gate", pretrained=True):
+    def __init__(self, in_ch=1, base_ch=32, use_attn=True, fuse="gate"):
         super().__init__()
         self.use_attn = use_attn
         self.fuse = fuse                       # "gate"(乘法门控) 或 "concat"(通道拼接+1x1融合)
-        self.backbone = VGG16Backbone(pretrained=pretrained)
-        c4  = self.backbone.out_ch_s4          # 128：stride4 特征通道（注意力 head 输入）
-        mid = self.backbone.out_ch_s8          # 256：stride8 特征通道（检测 head 输入）
+        self.down1 = DownBlock(in_ch, base_ch)
+        self.down2 = DownBlock(base_ch, base_ch * 2)
+        self.down3 = DownBlock(base_ch * 2, base_ch * 4)
+        self.bottleneck = ConvBlock(base_ch * 4, base_ch * 8)
+        mid = base_ch * 8
         if use_attn:
             self.attn_head = nn.Sequential(
-                nn.Conv2d(c4, c4 // 2, 3, padding=1, bias=False),
-                nn.BatchNorm2d(c4 // 2), nn.ReLU(inplace=True), nn.Conv2d(c4 // 2, 1, 1))
+                nn.Conv2d(base_ch * 4, base_ch * 2, 3, padding=1, bias=False),
+                nn.BatchNorm2d(base_ch * 2), nn.ReLU(inplace=True), nn.Conv2d(base_ch * 2, 1, 1))
             if fuse == "concat":               # 把注意力图作为额外1通道拼上, 再用1x1卷积压回 mid
                 self.fuse_conv = nn.Sequential(
                     nn.Conv2d(mid + 1, mid, 1, bias=False),
@@ -346,11 +348,13 @@ class AttnBBoxNet(nn.Module):
             nn.BatchNorm2d(mid // 4), nn.ReLU(inplace=True), nn.Conv2d(mid // 4, 2, 1))
 
     def forward(self, x):
-        f3, feat = self.backbone(x)            # f3: stride4(128ch) 给注意力 | feat: stride8(256ch) 给检测
+        _, x = self.down1(x); _, x = self.down2(x)
+        f3, x = self.down3(x)
+        feat = self.bottleneck(x)
         a_logit = None
         if self.use_attn:
             a_logit = self.attn_head(f3)
-            gate = F.avg_pool2d(torch.sigmoid(a_logit), 2)   # stride4 → 对齐到 stride8（检测分辨率）
+            gate = F.avg_pool2d(torch.sigmoid(a_logit), 2)   # 对齐到 bottleneck 分辨率
             if self.fuse == "concat":
                 feat = self.fuse_conv(torch.cat([feat, gate], dim=1))  # 拼接1通道再1x1融合
             else:
@@ -361,13 +365,14 @@ class AttnBBoxNet(nn.Module):
 # ══════════════════════════════════════════════════════════════════════════════
 # 4. Loss
 # ══════════════════════════════════════════════════════════════════════════════
-def objectness_loss(obj_logit, peak, lam_noobj=LAM_NOOBJ):
-    """YOLO 风格 objectness：硬目标(中心单元=1，其余=0) 的 BCE，正/负样本分开归一并加权平衡。"""
-    bce = F.binary_cross_entropy_with_logits(obj_logit, peak, reduction="none")
-    pos, neg = peak, 1.0 - peak
-    n_pos = pos.sum().clamp(min=1.0)
-    n_neg = neg.sum().clamp(min=1.0)
-    return (bce * pos).sum() / n_pos + lam_noobj * (bce * neg).sum() / n_neg
+def focal_loss_heatmap(pred_logit, target_hm, peak_mask, alpha=2.0, beta=4.0):
+    pred     = torch.sigmoid(pred_logit)
+    pos_mask = peak_mask
+    neg_w    = (1.0 - target_hm) ** beta
+    pos_loss = pos_mask * (1.0 - pred) ** alpha * torch.log(pred.clamp(min=1e-6))
+    neg_loss = neg_w * (1.0 - pos_mask) * pred ** alpha * torch.log((1.0 - pred).clamp(min=1e-6))
+    n_pos    = pos_mask.sum().clamp(min=1.0)
+    return -(pos_loss + neg_loss).sum() / n_pos
 
 
 def masked_l1(pred, gt, peak):
@@ -399,8 +404,8 @@ def attn_loss_soft(a_logit, band, margin=MARGIN):
 
 
 def compute_loss(model, img, hm, wh, off, peak, band, attn_mode):
-    obj_logit, wh_p, off_p, a_logit = model(img)   # 第一头当 objectness 用（YOLO 风格）
-    loss = (objectness_loss(obj_logit, peak)       # 硬中心 BCE，不再用高斯 hm/focal
+    hm_logit, wh_p, off_p, a_logit = model(img)
+    loss = (focal_loss_heatmap(hm_logit, hm, peak)
             + masked_l1(wh_p, wh, peak) + masked_l1(off_p, off, peak))
     if model.use_attn:
         if attn_mode == "abs":
@@ -413,8 +418,7 @@ def compute_loss(model, img, hm, wh, off, peak, band, attn_mode):
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. 训练
 # ══════════════════════════════════════════════════════════════════════════════
-def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, fuse="gate",
-                run_val=False, pretrained=True):
+def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, fuse="gate", run_val=False):
     set_seed(seed)
     use_attn = (attn_mode != "none")
     tr_set = Subset(full, tr)
@@ -429,8 +433,7 @@ def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, f
                      num_workers=NUM_WORKERS, pin_memory=_pin,
                      persistent_workers=(NUM_WORKERS > 0), worker_init_fn=_worker_init,
                      collate_fn=collate) if run_val else None)
-    model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=use_attn, fuse=fuse,
-                        pretrained=pretrained).to(device)
+    model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=use_attn, fuse=fuse).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     for ep in range(1, n_ep + 1):
         model.train(); tr_tot = 0.0
@@ -466,21 +469,20 @@ def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, f
 def predict(model, img_tensor):
     input_h, input_w = input_size
     gh, gw = input_h // HM_STRIDE, input_w // HM_STRIDE
-    obj_logit, wh_p, off_p, a_logit = model(img_tensor.to(device))
-    obj = torch.sigmoid(obj_logit[0, 0]).float().cpu().numpy()   # YOLO：objectness 网格
-    ys, xs = np.where(obj >= HM_THRESH)                          # 阈值化得到候选单元
+    hm_logit, wh_p, off_p, a_logit = model(img_tensor.to(device))
+    hm = torch.sigmoid(hm_logit[0, 0]).float().cpu().numpy()
+    hm_nms = _heatmap_nms(hm, nms_kernel)
+    ys, xs = np.where(hm_nms >= HM_THRESH)
     boxes, scores = [], []
     if len(ys) > 0:
+        sc = hm_nms[ys, xs]; order = np.argsort(sc)[::-1][:max_det]
+        ys, xs, sc = ys[order], xs[order], sc[order]
         whp, ofp = wh_p[0].float().cpu().numpy(), off_p[0].float().cpu().numpy()
-        cand_b, cand_s = [], []
         for yi, xi in zip(ys, xs):
             bw = float(whp[0, yi, xi]) * input_w; bh = float(whp[1, yi, xi]) * input_h
             cx = (xi + float(np.clip(ofp[0, yi, xi], -0.5, 0.5))) / gw * input_w
             cy = (yi + float(np.clip(ofp[1, yi, xi], -0.5, 0.5))) / gh * input_h
-            cand_b.append([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2])
-            cand_s.append(float(obj[yi, xi]))
-        keep = nms_iou(cand_b, cand_s, NMS_IOU_THR)[:max_det]    # 框级 IoU-NMS
-        boxes = [cand_b[i] for i in keep]; scores = [cand_s[i] for i in keep]
+            boxes.append([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]); scores.append(float(hm_nms[yi, xi]))
     A = torch.sigmoid(a_logit[0, 0]).float().cpu().numpy() if a_logit is not None else None
     return boxes, scores, A
 
@@ -552,13 +554,11 @@ def main():
                         help="每个 epoch 跑一遍 val 做监控打印（不参与选模型），默认关闭")
     parser.add_argument("--lam_att", nargs="+", type=float, default=LAM_ATT,
                         help="注意力 loss 权重扫描列表，如 --lam_att 0.3 0.5 2；默认取文件里的 LAM_ATT")
-    parser.add_argument("--no-pretrained", dest="pretrained", action="store_false", default=VGG_PRETRAINED,
-                        help="不加载 VGG-16 的 ImageNet 预训练权重（离线环境用）")
     parser.add_argument("--train_fracs", nargs="+", type=float, default=TRAIN_FRACS,
                         help="训练集占比扫描列表，如 --train_fracs 0.3 0.5 0.7；其余为 test（val=0）。默认取文件里的 TRAIN_FRACS")
     args = parser.parse_args()
 
-    work = os.path.join(os.getcwd(), f"attn_cnn_yolo_vgg16_{datetime.now().strftime('%m%d_%H%M')}")
+    work = os.path.join(os.getcwd(), f"attn_cnn_merged_final_{datetime.now().strftime('%m%d_%H%M')}")
     os.makedirs(work, exist_ok=True)
     # 把本次运行用的脚本快照复制到结果目录，便于复现（结果与代码一一对应）
     import shutil
@@ -566,9 +566,8 @@ def main():
     print("Using device:", device)
     full = AttnDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
     n = len(full)
-    print(f"[yolo-vgg16] n_total={n}  modes={args.modes}  seeds={args.seeds}  train_fracs={args.train_fracs}  "
-          f"margin={MARGIN}  lam_att_sweep={args.lam_att}  augment={args.augment}  fuse={args.fuse}  "
-          f"run_val={args.val}  pretrained={args.pretrained}", flush=True)
+    print(f"[merged] n_total={n}  modes={args.modes}  seeds={args.seeds}  train_fracs={args.train_fracs}  "
+          f"margin={MARGIN}  lam_att_sweep={args.lam_att}  augment={args.augment}  fuse={args.fuse}  run_val={args.val}", flush=True)
 
     # none 不用注意力 loss，与 LAM_ATT 无关 → 每个 (frac, seed) 只训一次（lam 记为 "-"）；
     # abs/soft 才需要对每个 lam 各训一次。
@@ -588,8 +587,7 @@ def main():
                 t0 = time.perf_counter()
                 tag = f"frac{frac}_seed{seed}_none"
                 model = train_model("none", full, tr, va, args.epochs, work, tag, seed,
-                                     augment=args.augment, fuse=args.fuse, run_val=args.val,
-                                     pretrained=args.pretrained)
+                                     augment=args.augment, fuse=args.fuse, run_val=args.val)
                 m = evaluate(model, full, te)
                 gap = attn_gap(model, full, te)
                 print(f"  frac{frac} seed{seed} none: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
@@ -605,8 +603,7 @@ def main():
                     t0 = time.perf_counter()
                     tag = f"frac{frac}_seed{seed}_{attn_mode}_lam{lam}"
                     model = train_model(attn_mode, full, tr, va, args.epochs, work, tag, seed,
-                                         augment=args.augment, fuse=args.fuse, run_val=args.val,
-                                         pretrained=args.pretrained)
+                                         augment=args.augment, fuse=args.fuse, run_val=args.val)
                     m = evaluate(model, full, te)
                     gap = attn_gap(model, full, te)
                     print(f"  frac{frac} lam{lam} seed{seed} {attn_mode:>4}: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "

@@ -21,48 +21,85 @@ import seaborn as sns
 HERE = Path(__file__).resolve().parent
 CSV = HERE / "merged_results-06281917.csv"
 OUT = HERE / "boxplot_f1_none_vs_abs_lam.png"
+IEEE_DIR = Path(r"C:\Users\79152\Desktop\github\shuangquxian\writepaper\IEEE")   # PDF 另存目录
 
 METRIC = "bbox_F1"
-LAM_ORDER = ["0.1", "0.3", "0.5", "0.7", "1", "3", "5"]   # abs 的 lam 排序
+LAM_ORDER = ["0.1", "0.3", "0.5", "0.7", "1", "3", "5","7","10"]   # abs 的 lam 排序
 ORDER = ["none"] + LAM_ORDER                               # x 轴顺序, none 作基线
 
-# 中文字体, 避免出现方块
-plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial"]
-plt.rcParams["axes.unicode_minus"] = False
-sns.set_theme(style="whitegrid", context="talk", font="Microsoft YaHei")
+# ---------------------------------------------------------------- 期刊风格
+# 无衬线专业字体 + 紧凑排版, 适合论文单栏插图
+plt.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+    "axes.unicode_minus": False,
+    "font.size": 14,
+    "axes.titlesize": 16,
+    "axes.labelsize": 16,
+    "xtick.labelsize": 13,
+    "ytick.labelsize": 13,
+    "axes.linewidth": 0.8,
+    "xtick.direction": "out",
+    "ytick.direction": "out",
+    "xtick.major.width": 0.8,
+    "ytick.major.width": 0.8,
+    "savefig.dpi": 300,
+    "figure.dpi": 150,
+})
 
 
 def main() -> None:
     df = pd.read_csv(CSV)
     # 统一分组标签: none 单独一组, abs 用其 lam 值
     df["group"] = np.where(df["config"] == "none", "none", df["lam_att"].astype(str))
+    # 只保留 ORDER 里定义的组, 丢掉空行(config 为 NaN)和未纳入的 lam 值
+    df = df[df["group"].isin(ORDER)]
 
-    # 颜色: none 用灰色, abs 各 lam 用渐变色带
-    abs_colors = sns.color_palette("viridis", len(LAM_ORDER))
-    palette = {"none": (0.6, 0.6, 0.6)} | dict(zip(LAM_ORDER, abs_colors))
+    # 颜色: 所有箱体统一浅灰填充 + 黑色边框; 黑白印刷也清晰
+    palette = {g: (0.88, 0.88, 0.88) for g in ORDER}
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(6.5, 4.0))
     sns.boxplot(
         data=df, x="group", y=METRIC, order=ORDER,
         hue="group", palette=palette, legend=False,
-        width=0.6,
-        showfliers=False,   # 不画散点, 也不画离群点, 只保留箱体和须线
+        width=0.62,
+        linewidth=0.9,
+        fliersize=0,            # 不画离群点
+        showcaps=True,
+        boxprops={"edgecolor": "black"},
+        whiskerprops={"color": "black", "linewidth": 0.9},
+        capprops={"color": "black", "linewidth": 0.9},
+        medianprops={"color": "black", "linewidth": 1.3},
         ax=ax,
     )
 
-    ax.set_title("none vs abs:不同 lam_att 的 BBox F1 分布")
-    ax.set_xlabel("lam_att(none = 基线)")
-    ax.set_ylabel("BBox F1")
-    ax.set_ylim(0.5, 0.93)   # 纵轴从 0.5 开始
+    ax.set_xlabel(r"$\lambda$ (none = baseline)")
+    ax.set_ylabel("F1")
+    ax.set_ylim(0.5, 0.93)
+
+    # 去掉上/右边框, 网格仅保留淡化的 y 方向
+    sns.despine(ax=ax, top=True, right=True)
+    ax.yaxis.grid(True, color="0.85", linewidth=0.6, zorder=0)
+    ax.xaxis.grid(False)
+    ax.set_axisbelow(True)
 
     fig.tight_layout()
-    fig.savefig(OUT, dpi=200, bbox_inches="tight")
+    fig.savefig(OUT, bbox_inches="tight")
+    fig.savefig(OUT.with_suffix(".pdf"), bbox_inches="tight")   # 矢量图供排版
+    # 另存一份 PDF 到 IEEE 目录
+    IEEE_DIR.mkdir(parents=True, exist_ok=True)
+    ieee_pdf = IEEE_DIR / OUT.with_suffix(".pdf").name
+    fig.savefig(ieee_pdf, bbox_inches="tight")
     print(f"saved: {OUT}")
+    print(f"saved: {ieee_pdf}")
     plt.close(fig)
 
-    # 顺手打印各组 F1 的中位数/均值/标准差
-    stat = df.groupby("group")[METRIC].agg(["median", "mean", "std"]).reindex(ORDER)
+    # 各组 F1 的中位数/均值/标准差: 打印并保存为 CSV
+    stat = df.groupby("group")[METRIC].agg(["count", "median", "mean", "std"]).reindex(ORDER)
     print(stat.round(4))
+    stat_csv = OUT.with_name("boxplot_f1_none_vs_abs_lam_stats.csv")
+    stat.round(4).to_csv(stat_csv, index_label="group")
+    print(f"saved: {stat_csv}")
 
 
 if __name__ == "__main__":
