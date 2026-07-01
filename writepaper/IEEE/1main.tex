@@ -55,7 +55,15 @@ Article submission, IEEE, IEEEtran, journal, \LaTeX, paper, template, typesettin
 
 \section{Related work}
 \subsection{Hyperbola recognition task}
-%b scan是怎么产生的可以在这里介绍
+\begin{figure*}[]
+\centering
+\includegraphics[width=0.9\linewidth]{bscan.png}
+\caption{Formation of a GPR B-scan from successive A-scan traces.}
+\label{fig:bscan}
+\end{figure*}
+
+Ground-penetrating radar (GPR) forms a subsurface image by moving a transmitter/receiver (Tx/Rx) antenna along a survey line: at each position $T_0,T_1,T_2,\dots$ it emits an electromagnetic pulse and records the reflected signal as a single trace (an A-scan) of amplitude versus two-way travel time. Stacking consecutive traces side by side yields a B-scan, whose horizontal axis is the trace number (antenna position) and whose vertical axis is travel time, which is monotonically related to depth. Because a compact buried target is illuminated from many antenna positions, its round-trip distance is shortest directly above the object and increases symmetrically to either side, so the target's reflection is imaged as a downward-opening hyperbola (Fig.~\ref{fig:bscan}).
+
 In GPR B-scan images, buried pipes, cables, and roots typically appear as hyperbolic reflections, making hyperbola detection a prerequisite for target localization, depth estimation, and parameter reconstruction \cite{jin2024gprformer,lei2020cnnlstm,maas2013violahough}. Early methods relied on hand-crafted features and analytical fitting, screening candidates with neural preprocessing, Viola--Jones, or HOG+SVM and then localizing them via the Hough transform or template/least-squares fitting \cite{alnuaimy2000nn,maas2013violahough,lee2014hog,sagnard2016template,dou2017c3}. Such pipelines work in constrained settings but remain computationally expensive, sensitive to parameter discretization, and dependent on prior template design or user intervention \cite{lei2020cnnlstm,pham2018fasterrcnn,sagnard2016template,kafedziski2018c3hough}; later refinements combined edge detection and C3 clustering with Hough fitting to improve robustness \cite{kafedziski2018c3hough,barkataki2023c3}.
 
 Deep learning shifted the field from sliding-window recognition toward end-to-end detection on full B-scans. Two-stage detectors led this transition: Faster R-CNN, trained with simulated radargrams to offset scarce field labels \cite{pham2018fasterrcnn}, was later coupled with explicit hyperbola fitting for automatic localization \cite{lei2019autohyperbola}, while a CNN-LSTM reformulated diameter identification as region classification and reached 92.5\% accuracy on field data \cite{lei2020cnnlstm}. One-stage detectors emphasized real-time deployment, with YOLOv3 running at about 12 fps \cite{li2020yolov3}, combined with migration-based focusing and apex extraction to estimate pipeline depth within 0.04 m \cite{liu2022pipeline}, and a YOLOv4 variant tailored to root recognition and localization \cite{li2022yolov4root}.
@@ -306,12 +314,68 @@ Fig.~\ref{fig:lambda} illustrates the distribution of the detection F1 as the at
 %软性的约束是不是可能会更加好 如果lam参数调节好的话
 \section{Discussion}
 %讨论为什么不直接预测双曲线--面前主流的任务还是用bbox
+\subsection{On the choice of output representation}
+%为什么不直接预测双曲线：一个自然的疑问是,既然我们的标注工具已经提供了每条双曲线完整的参数化描述(顶点、宽度、高度、曲率和带状厚度),为什么不训练网络直接回归这些参数。这是一个经过深思熟虑的设计选择。第一,主流的检测任务及其数据集和评价协议(基于IoU的精确率、召回率与F1)都是围绕边界框构建的;保留边界框输出使我们能够在完全一致的协议下与主流检测器和通用注意力模块进行公平比较,并将本文所提出的几何引导注意力监督带来的增益,与改变输出表示所带来的影响干净地隔离开来。第二,丰富的几何标注并没有被丢弃,而是被光栅化为条带掩膜,作为注意力分支的显式监督信号,使几何先验去塑形网络内部的特征表示,同时保持成熟而稳定的边界框检测头不变,从而使该模块易于插入到现有检测器中。第三,直接回归诸如曲率之类的双曲线参数对标注噪声、杂波、旁瓣以及相互重叠的回波都很敏感,而且各参数尺度不一使得损失难以平衡、训练不稳定,相比之下"先检测再拟合"的分解更为鲁棒。最后,边界框仍然与现有的定位、深度估计和反演流程相兼容,使方法易于部署。
+A natural question is why, given that our annotation tool already provides a
+full parametric description of each hyperbola (vertex, width, height, curvature,
+and band thickness), the network is not trained to regress these parameters
+directly. This is a deliberate design choice. First, the mainstream detection
+task, together with its datasets and evaluation protocols (IoU-based precision,
+recall, and F1), is built around bounding boxes; retaining a bounding-box output
+allows a fair comparison with mainstream detectors and generic attention modules
+under an identical protocol, and cleanly isolates the gain brought by the
+proposed geometry-guided attention supervision from any effect of changing the
+output representation. Second, the rich geometric annotation is not discarded but
+rasterized into a band mask and used as an explicit \emph{supervisory} signal for
+the attention branch, so that the geometric prior shapes the internal feature
+representation while the mature and stable bounding-box head is kept intact,
+making the module easy to plug into existing detectors. Third, directly
+regressing hyperbola parameters such as curvature is sensitive to annotation
+noise and clutter, side lobes, and overlapping echoes, and the disparate scales
+of the parameters make the loss difficult to balance and the training unstable,
+whereas a detect-then-fit decomposition is more robust. Finally, bounding boxes
+remain compatible with existing localization, depth-estimation, and
+reconstruction pipelines, keeping the method readily deployable.
 
-%未来的工作是对双曲线进行预测，并且输出各种参数用于反演
+%这些替代方案构成了一个输出粒度的谱系。在一端,传统的基于对比度或边缘的提取方法配合霍夫变换或最小二乘拟合,能够显式地恢复曲线本身,但在杂波、旁瓣以及双曲线相互重叠的情况下十分脆弱,且依赖于细致的参数调节。边界框则位于另一端——粗糙,但鲁棒且高度标准化。像素级的分割掩膜介于两者之间:它能更紧地贴合回波轮廓,但需要密集的逐像素标注,难以在不同方法之间进行一致的比较,并且仍然无法给出双曲线的底层参数,如顶点位置或曲率。直接的参数化回归几何信息最丰富,却也最难稳定训练。因此,我们将网络的输出保持在边界框这一端,转而将更精细的条带几何作为监督信号注入网络,从而在保留标准检测器的鲁棒性与可比性的同时,仍能受益于几何先验;而真正恢复参数化的双曲线本身,则留待未来工作。
+These alternatives span a spectrum of output granularity. At one end, classical
+contrast- or edge-based extraction followed by Hough or least-squares fitting
+recovers the curve explicitly, but is fragile under clutter, side lobes, and
+overlapping echoes and relies on careful parameter tuning. Bounding boxes lie at
+the coarse yet robust and highly standardized end. Pixel-wise segmentation masks
+fall in between: they trace the echo more tightly, but demand dense annotation,
+are harder to compare consistently across methods, and still do not expose the
+underlying hyperbola parameters such as vertex position or curvature. Direct
+parametric regression is the most geometrically informative yet the hardest to
+train stably. We therefore keep the network output at the bounding-box end and
+instead inject the finer band geometry as supervision, retaining the robustness
+and comparability of a standard detector while still benefiting from the
+geometric prior; recovering the parametric hyperbola itself is left to future
+work.
 
+\subsection{Future work}
+%未来的工作是对双曲线进行预测,并输出各种参数用于反演:本文最直接的延伸是从边界框定位转向预测双曲线本身。由于注意力分支已经被监督为产生贴合双曲线几何的条带状响应,一个自然的下一步是在其上附加一个轻量的回归头,把该响应解码为每条双曲线的参数化描述——顶点位置、张开宽度、曲率与带状厚度,而不是轴对齐的矩形框。这样的参数化输出可以直接馈入下游的地球物理反演,从而无需单独的后处理曲线拟合阶段即可估计目标的埋深、半径以及埋藏介质属性。
+The most direct extension of this work is to move beyond bounding-box
+localization toward predicting the hyperbola itself. Because the attention
+branch is already supervised to produce a band-shaped response that closely
+follows the hyperbola geometry, a natural next step is to attach a lightweight
+regression head that decodes this response into the parametric description of
+each hyperbola---vertex position, opening width, curvature, and band
+thickness---rather than an axis-aligned box. Such parametric outputs would feed
+downstream geophysical inversion directly, enabling estimation of target depth,
+radius, and burial-medium properties without a separate post-hoc curve-fitting
+stage.
 
-%看一下heatmap的图 证明注意力真的有效 但是要说明并不是就会转移到双曲线带上
-%bbox是中心点风格  centernet风格的注意力热力图可能不一样
+%第二个方向是考察本文的几何引导注意力监督在不同检测范式间的迁移能力:本文的检测器以稠密的YOLO风格回归框尺寸与中心偏移,而中心点式(如CenterNet风格)或基于关键点的检测器通过中心热力图来定位目标,其空间响应在本质上不同于条带状的注意力图。研究显式的条带监督如何与这类以中心为焦点的表示相互作用、以及是否仍然有益,将有助于厘清该方法的通用性,并指导其融入更广泛的探地雷达检测器。
+A second direction is to examine how the proposed geometry-guided attention
+supervision transfers across detection paradigms. Our current detector regresses
+box size and center offset in a dense YOLO-style manner, whereas center-point
+(e.g., CenterNet-style) or keypoint-based detectors localize targets through
+center heatmaps whose spatial response differs in nature from a band-shaped
+attention map. Investigating how explicit band supervision interacts with such
+center-focused representations, and whether it remains beneficial, would clarify
+the generality of the approach and guide its integration into a wider range of
+GPR detectors.
 \section*{Acknowledgments}
 This should be a simple paragraph before the References to thank those individuals and institutions who have supported your work on this article.
 
