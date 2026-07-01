@@ -76,7 +76,7 @@ def normalize_obj(obj):
 class HyperbolaAnnotator:
     def __init__(self, root):
         self.root = root
-        self.root.title("GPR Hyperbola Annotation Tool (slope)")
+        self.root.title("GPR Hyperbola Annotation Tool")
         self.root.geometry("1900x900")
 
         self.image_dir = ""
@@ -157,9 +157,6 @@ class HyperbolaAnnotator:
         self._make_slider(self.control_frame, "slope",     self.var_slope,     row, 0.1, 5);  row += 1
         self._make_slider(self.control_frame, "span",      self.var_span,      row, 10, 600); row += 1
         self._make_slider(self.control_frame, "thickness", self.var_thickness, row, 1, 150);  row += 1
-
-        self.ab_label = ttk.Label(self.control_frame, text="auto: a=- , b=-")
-        self.ab_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6)); row += 1
 
         self.btn_add = ttk.Button(self.control_frame, text="Add as New Annotation",    command=self.add_object)
         self.btn_add.grid(row=row, column=0, columnspan=2, sticky="ew", padx=6, pady=6); row += 1
@@ -326,10 +323,6 @@ class HyperbolaAnnotator:
     def refresh_preview(self, *_):
         if self.original_image is None:
             return
-        # Live readout of the auto-derived semi-axes.
-        a, b = hyperbola_ab(self.var_y.get(), self.var_slope.get())
-        self.ab_label.config(text=f"auto: a={a:.1f} , b={b:.1f}")
-
         preview_img = self.original_image.copy()
         draw = ImageDraw.Draw(preview_img, "RGBA")
 

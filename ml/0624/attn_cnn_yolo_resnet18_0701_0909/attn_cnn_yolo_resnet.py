@@ -72,7 +72,7 @@ TRAIN_FRACS  = [0.80]                     # 训练集占比扫描列表，如 [0
 AUGMENT      = False                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
 RUN_VAL      = False                      # 是否每个 epoch 跑一遍 val（仅打印监控）。还没做自动选参，默认关，省时
-BACKBONE       = "resnet34"              # 主干网络：resnet18 / resnet34 / resnet50（命令行 --backbone 可覆盖）
+BACKBONE       = "resnet18"              # 主干网络：resnet18 / resnet34 / resnet50（命令行 --backbone 可覆盖）
 RESNET_PRETRAINED = True                # ResNet 是否加载 ImageNet 预训练权重（离线环境改 False / 用 --no-pretrained）
 
 input_size   = (640, 640)
@@ -80,7 +80,7 @@ HM_STRIDE    = 8                    # heatmap 下采样步长
 ATTN_STRIDE  = 4                    # 注意力图下采样步长
 HM_SIGMA     = 6                  # heatmap 高斯半径
 batch_size   = 8
-NUM_WORKERS  = 8   # DataLoader 数据加载进程数：自动按 CPU 核数（封顶 8）；设 0 关闭多进程加载
+NUM_WORKERS  = min(os.cpu_count() or 1, 8)   # DataLoader 数据加载进程数：自动按 CPU 核数（封顶 8）；设 0 关闭多进程加载
 num_epochs   = 80
 LR           = 5e-4                 # Adam 学习率
 nms_kernel   = 3                   # （YOLO 风格不再用热图 maxpool-NMS，此项无效，保留兼容）
@@ -92,7 +92,7 @@ LAM_NOOBJ    = 0.5                 # YOLO：objectness 损失中 noobj(背景) �
 BASE_CH      = 32                   # （ResNet 主干自带固定通道数，此项保留兼容，网络不再使用）
 
 # —— 注意力监督相关（调参核心）——
-LAM_ATT      = [0.3,0.5,0.7,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
+LAM_ATT      = [0.3,0.5,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
 
 LAM_ATT_CUR  = 1.0                  # 占位用。。。运行时当前权重（主循环按 LAM_ATT 逐个设置；compute_loss 实际用它）
 MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
