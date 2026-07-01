@@ -35,7 +35,6 @@
 \markboth{Journal of \LaTeX\ Class Files,~Vol.~14, No.~8, August~2021}%
 {Shell \MakeLowercase{\textit{et al.}}: A Sample Article Using IEEEtran.cls for IEEE Journals}
 
-\IEEEpubid{0000--0000/00\$00.00~\copyright~2021 IEEE}
 % Remember, if you use this you must call \IEEEpubidadjcol in the second
 % column for its text to clear the IEEEpubid mark.
 
@@ -58,7 +57,7 @@ Article submission, IEEE, IEEEtran, journal, \LaTeX, paper, template, typesettin
 \begin{figure*}[]
 \centering
 \includegraphics[width=0.9\linewidth]{bscan.png}
-\caption{Formation of a GPR B-scan from successive A-scan traces.}
+\caption{Formation of a GPR B-scan.}
 \label{fig:bscan}
 \end{figure*}
 
@@ -95,55 +94,47 @@ In GPR interpretation, hyperbolic reflections are usually annotated with these s
 %首先，选择图片的文件夹，然后会自动加载其中的图片
 %然后下方左侧会显示原图，右侧会显示标注后的图片。
 %在左图单击的点为双曲线的顶点位置，右侧可以调节各个参数。
-%我们设定了5个参数。分别是双曲线顶点的横纵坐标，双曲线的宽度，曲率和带状厚度。
+%我们设定了5个参数。分别是双曲线顶点的横纵坐标，渐近线斜率slope，水平跨度span和带状厚度thickness。斜率是唯一的形状参数，编码波速；顶点深度即竖直半轴a，b=y_vertex/slope。
 %点 Add as New Annotation 把当前参数作为一个新标注加入当前图片，并且可以在同一个图中添加多个标注。
 %我们的标注通过json格式保存
-%格式为{
-  % "001.jpg": [
-  %   {
-  %     "label": "hyperbola",
-  %     "x_vertex": 148.16,
-  %     "y_vertex": 194.24,
-  %     "width": 60.0,
-  %     "height": 30.0,
-  %     "thickness": 12.0
-  %   }
-  % ],
-  % }
-%001.jpg是图片的名字，其余是参数和对应的值
 We designed a visual annotation tool for hyperbolic ribbon-shaped targets, whose user interface is illustrated in the Fig.~\ref{fig:tool}.
 First, the user selects an image folder, and the tool automatically loads all images within it.
 The original image is displayed on the lower-left panel, while the annotated image is shown on the right.
 A mouse click on the original image marks the vertex position of the hyperbola, and five adjustable parameters are provided on the right panel.
 
-The five parameters are defined as follows: the horizontal and vertical coordinates of the hyperbola vertex, hyperbola width, height, and ribbon thickness.
-By clicking the \emph{Add as New Annotation} button, the current parameter configuration is saved as a new annotation for the active image, and multiple annotations can be added to a single image.
+The five parameters are defined as follows: the horizontal coordinate $x_{\mathrm{vertex}}$ and 
+vertical coordinate $y_{\mathrm{vertex}}$ of the hyperbola vertex, the slope $s$, the horizontal span, and the ribbon thickness.
+Among these, the slope $s$ is the only parameter that governs the shape of the curve. 
+Once the vertex is placed, a single slope value fully fixes the openness of the two arms, 
+so a larger slope yields a narrower and sharper hyperbola and a smaller slope yields a flatter one.
+The centreline of the downward-opening band is
+\begin{equation}
+y_c(x) = y_{\mathrm{vertex}}\sqrt{1 + \left(\frac{s\,(x - x_{\mathrm{vertex}})}{y_{\mathrm{vertex}}}\right)^2},
+\end{equation}
+and the band is the vertical ribbon of all points $(x,y)$ satisfying $|y - y_c(x)| \le \mathrm{thickness}/2$, 
+where the span sets the horizontal extent over which the two arms are drawn.
+By clicking the \emph{Add as New Annotation} button, 
+the current parameter configuration is saved as a new annotation for the active image, 
+and multiple annotations can be added to a single image.
 
 All annotations are stored in JSON format with the following structure:
 \begin{verbatim}
 {
-  "024.jpg": [
+  "line2888_0-100_jpg.rf.ce38dc3799
+  2454823c8dea9e0f814ac5.jpg": [
     {
       "label": "hyperbola",
-      "x_vertex": 127.04,
-      "y_vertex": 163.84,
-      "width": 87.65,
-      "height": 59.76,
-      "thickness": 33.03
-    },
-    {
-      "label": "hyperbola",
-      "x_vertex": 186.56,
-      "y_vertex": 109.76,
-      "width": 97.35,
-      "height": 79.35,
-      "thickness": 33.03
-    }
-  ]
+      "x_vertex": 315.4,
+      "y_vertex": 241.5,
+      "slope": 3.09,
+      "span": 387.9,
+      "thickness": 115.8
+    }]
 }
 \end{verbatim}
 
-Here, \emph{024.jpg} denotes the image filename, and the remaining entries represent the parameters and their corresponding values.
+Here, the top-level key denotes the image filename, 
+and each list entry stores one annotated hyperbola band as its parameters and their corresponding values.
 
 
 \begin{figure*}
@@ -186,21 +177,76 @@ A schematic of the network is shown in Fig.~\ref{fig:11}.
 \label{fig:11}
 \end{figure}
 
-The backbone consists of three down-sampling stages followed by a bottleneck layer; each stage comprises two $3\times3$ convolutions, 
-each followed by batch normalization and ReLU, together with a subsequent $2\times2$ max-pooling operation that doubles the channel depth while halving the spatial resolution.
-Across the three stages the resulting feature maps are $1\times640^2$, $32\times320^2$, $64\times160^2$, and $128\times160^2$, further reduced to $256\times80^2$ at the bottleneck.
-The attention branch takes $f_3$ as input rather than the bottleneck feature $F_b$, as $f_3$ retains a higher spatial resolution that is better suited to precise localization.
+The backbone consists of three down-sampling stages followed by a bottleneck layer; 
+each stage comprises two $3\times3$ convolutions, 
+each followed by batch normalization and ReLU, 
+together with a subsequent $2\times2$ max-pooling operation 
+that doubles the channel depth while halving the spatial resolution.
+Starting from the $1\times640^2$ input, 
+the three stages produce feature maps $f_1$ of size $32\times320^2$, $f_2$ of size $64\times160^2$, 
+and $f_3$ of size $128\times160^2$, which are further reduced to the bottleneck feature $F_b$ of size $256\times80^2$.
+The attention branch takes $f_3$ as input rather than the bottleneck feature $F_b$, 
+as $f_3$ retains a higher spatial resolution that is better suited to precise localization.
 
 
 % 监督注意力分支为本文方法的核心。轻量注意力头 $g_a(\cdot)$ 由一层 $3\times3$ 卷积、批归一化与 ReLU 及一层 $1\times1$ 卷积构成,将 $f_3$ 映射为单通道注意力图,并经 sigmoid 激活得到 $A$。作为监督真值,本文依据标注的双曲线几何参数光栅化生成条带掩膜 $B$。随后,采用二值交叉熵与 Dice 联合损失 $\mathcal{L}_{\mathrm{att}} = \mathcal{L}_{\mathrm{bce}} + \mathcal{L}_{\mathrm{dice}}$ 逐像素约束 $A$ 逼近 $B$。其中,二值交叉熵可理解为对每个像素单独做"是/否属于双曲线带"的二分类判断,并逐一惩罚判断错误的像素;Dice 项则直接衡量预测区域与真值区域的整体重叠程度,重叠越高损失越小。二者互补:前者保证逐像素的判别精度,后者保证区域级的形状一致性,并可缓解条带区域相对图像背景占比过小所带来的类别不平衡问题。
 
-The supervised attention branch is the central component of the proposed method. A lightweight head $g_a(\cdot)$, consisting of a $3\times3$ convolution with batch normalization and ReLU followed by a $1\times1$ convolution, maps $f_3$ to a single-channel logit that is passed through a sigmoid to yield the attention map $A$. The supervisory target $B$ is a band mask rasterized from the annotated hyperbola geometry. The attention map is then supervised pixel-wise to approximate $B$ using a combined binary cross-entropy and Dice loss, $\mathcal{L}_{\mathrm{att}} = \mathcal{L}_{\mathrm{bce}} + \mathcal{L}_{\mathrm{dice}}$. Binary cross-entropy can be understood as an independent yes/no classification at every pixel, penalizing each pixel that is misclassified as belonging to, or not belonging to, the hyperbola band. The Dice term instead measures the overall overlap between the predicted and ground-truth regions, with the loss decreasing as the overlap increases. The two terms are complementary: the former enforces pixel-level accuracy, while the latter enforces region-level shape consistency and helps mitigate the class imbalance caused by the band occupying only a small fraction of the image.
+The supervised attention branch is the central component of the proposed method. 
+A lightweight head $g_a(\cdot)$, consisting of a $3\times3$ convolution with batch normalization 
+and ReLU followed by a $1\times1$ convolution, maps $f_3$ to a single-channel logit 
+that is passed through a sigmoid to yield the attention map $A\in[0,1]^{H\times W}$,
+whose entry $A_i$ is the predicted probability that pixel $i$ belongs to the hyperbola band.
+The supervisory target $B\in\{0,1\}^{H\times W}$ is a binary band mask rasterized from the annotated hyperbola geometry at the same resolution.
+The attention map $A$ is then driven to approximate $B$ by a loss that combines a binary cross-entropy term and a Dice term, both computed between $A$ and $B$ over the $N=HW$ pixels,
+\begin{equation}
+\mathcal{L}_{\mathrm{att}} = \mathcal{L}_{\mathrm{bce}} + \mathcal{L}_{\mathrm{dice}},
+\end{equation}
+\begin{equation}
+\mathcal{L}_{\mathrm{bce}} = -\frac{1}{N}\sum_{i=1}^{N}\Big[B_i\log A_i + (1-B_i)\log(1-A_i)\Big],
+\end{equation}
+\begin{equation}
+\mathcal{L}_{\mathrm{dice}} = 1 - \frac{2\sum_{i=1}^{N} A_i B_i}{\sum_{i=1}^{N} A_i + \sum_{i=1}^{N} B_i + \epsilon},
+\end{equation}
+where $\epsilon=10^{-6}$ is a small constant added to the denominator to avoid division by zero.
+The cross-entropy term performs an independent per-pixel classification, penalizing each pixel that is misclassified as belonging to, or not belonging to, the hyperbola band.
+The Dice term instead measures the overall overlap between $A$ and $B$, with the loss decreasing as the overlap increases.
+The two terms are complementary: the former enforces pixel-level accuracy, 
+while the latter enforces region-level shape consistency 
+and helps mitigate the class imbalance caused by the band occupying only a small fraction of the image.
 
 \paragraph{Attention-guided feature fusion.}
-The attention map $A$ is passed through a sigmoid and downsampled by a factor of two via average pooling to align with the bottleneck resolution, yielding $\tilde{A}$. It is then concatenated with $F_b$ along the channel dimension and compressed back to 256 channels by a $1\times1$ convolution with batch normalization and ReLU, producing the fused feature $\hat{F}$. This operation injects the spatial prior of the hyperbola band into the feature representation passed to the detection head.
+The attention map $A$ is passed through a sigmoid and downsampled by a factor of two via average pooling 
+to align with the bottleneck resolution, yielding $\tilde{A}$. 
+It is then concatenated with $F_b$ along the channel dimension 
+and compressed back to 256 channels by a $1\times1$ convolution with batch normalization and ReLU, 
+producing the fused feature $\hat{F}$. 
+This operation injects the spatial prior of the hyperbola band into the feature representation passed to the detection head.
 
 \paragraph{Detection head and decoding.}
-The detection head follows a YOLO-style dense prediction paradigm, producing three parallel outputs over an $80\times80$ grid at stride 8: objectness (1 channel), box size (2 channels), and sub-pixel center offset (2 channels). During inference, grid cells whose sigmoid-activated objectness exceeds a threshold $\tau$ are decoded into bounding boxes, and redundant detections are removed by box-level IoU-based non-maximum suppression. The head is trained with a detection loss $\mathcal{L}_{\mathrm{det}} = \mathcal{L}_{\mathrm{obj}} + \mathcal{L}_{\mathrm{size}} + \mathcal{L}_{\mathrm{off}}$, aggregating the objectness, box-size, and center-offset terms, and the overall training objective combines this with the attention supervision loss introduced above,
+The detection head follows a YOLO-style dense prediction paradigm, 
+producing three parallel outputs over an $80\times80$ grid at stride 8: 
+objectness (1 channel), box size (2 channels), and sub-pixel center offset (2 channels). 
+During inference, grid cells whose sigmoid-activated objectness exceeds a threshold $\tau$ are decoded into bounding boxes, 
+and redundant detections are removed by box-level IoU-based non-maximum suppression. 
+Let $\mathcal{P}$ denote the set of positive cells, namely the grid cells that contain an object center, and $\mathcal{N}$ the remaining background cells.
+The objectness map is supervised by a class-balanced binary cross-entropy over the hard targets $p_j$, which equal $1$ at positive cells and $0$ elsewhere,
+\begin{equation}
+\mathcal{L}_{\mathrm{obj}} = \frac{1}{|\mathcal{P}|}\sum_{j\in\mathcal{P}} \mathrm{BCE}(\hat{o}_j, 1)
++ \frac{\lambda_{\mathrm{noobj}}}{|\mathcal{N}|}\sum_{j\in\mathcal{N}} \mathrm{BCE}(\hat{o}_j, 0),
+\end{equation}
+where $\hat{o}_j$ is the predicted objectness logit at cell $j$ and $\lambda_{\mathrm{noobj}}=0.5$ down-weights the dominant background cells.
+The box-size and center-offset branches are regressed only at the positive cells with an $\ell_1$ loss,
+\begin{equation}
+\mathcal{L}_{\mathrm{size}} = \frac{1}{|\mathcal{P}|}\sum_{j\in\mathcal{P}} \lVert \hat{s}_j - s_j \rVert_1,
+\qquad
+\mathcal{L}_{\mathrm{off}} = \frac{1}{|\mathcal{P}|}\sum_{j\in\mathcal{P}} \lVert \hat{\delta}_j - \delta_j \rVert_1,
+\end{equation}
+where $s_j$ and $\delta_j$ are the ground-truth box size and sub-pixel center offset and $\hat{s}_j$, $\hat{\delta}_j$ their predictions.
+The detection loss is the sum of the three terms,
+\begin{equation}
+\mathcal{L}_{\mathrm{det}} = \mathcal{L}_{\mathrm{obj}} + \mathcal{L}_{\mathrm{size}} + \mathcal{L}_{\mathrm{off}},
+\end{equation}
+and the overall training objective combines it with the attention supervision loss introduced above,
 \begin{equation}
 \mathcal{L} = \mathcal{L}_{\mathrm{det}} + \lambda_{\mathrm{att}}\, \mathcal{L}_{\mathrm{att}},
 \end{equation}
@@ -285,13 +331,13 @@ Shen et al.~\cite{CA}    & $0.80 \pm 0.23$ & $0.84 \pm 0.09$ & $0.80 \pm 0.17$ \
 \bottomrule
 \end{tabular}
 \end{table}
-\subsection{Result3}
+%\subsection{Result3}
 %在其他的识别框架中也有效 和centernet框架比较嘛
 
-\subsection{Result4}
+%\subsection{Result4}
 %放在其他的预训练的backbone中也有效 ok
 
-\subsection{Result3}
+%\subsection{Result3}
 
 
 \subsection{Sensitivity analysis of the parameter $\lambda$}
