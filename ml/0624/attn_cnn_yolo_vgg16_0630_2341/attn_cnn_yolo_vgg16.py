@@ -1,24 +1,22 @@
 """
-自己完结・单文件版（ResNet 主干版，默认 ResNet-18）：
+自己完结・单文件版（VGG-16 主干版）：
   YOLO 网格(anchor-free) 矩形框检测头 + 显式注意力监督（双曲线带 mask 监督注意力图）。
-  本文件由 attn_cnn_yolo_vgg16.py 改造而来，**唯一的核心区别是把 VGG-16 主干换成
-  torchvision 的 ResNet（默认 resnet18，可 --backbone 切 resnet34/resnet50）作为特征提取网络**。
-  其余（YOLO 风格检测、注意力 none/abs/soft、数据集、训练、评估、划分）全部保持不变，
-  以保证与 vgg16 / from-scratch 版的公平对比（同一套 head、同一 stride4/stride8 接口）。
+  本文件由 attn_cnn_yolo_final.py 改造而来，**唯一的核心区别是把自定义的 U-Net 风编码器
+  （DownBlock×3 + bottleneck）整体替换成 torchvision 的 VGG-16 作为训练/特征提取网络**。
+  其余（YOLO 风格检测、注意力 none/abs/soft、数据集、训练、评估、划分）全部保持不变。
 
-【ResNet 主干如何接到原来的检测/注意力 head】
+【VGG-16 主干如何接到原来的检测/注意力 head】
   原网络有两个关键特征点：
     - f3        : stride 4（160×160），喂给注意力 head（ATTN_STRIDE=4 对齐 band）
     - bottleneck: stride 8（ 80× 80），喂给 heatmap/wh/offset 检测 head（HM_STRIDE=8）
-  ResNet 各 stage（输入 stride 累计）：
-    conv1(7×7,s2)+bn+relu -> stride 2
-    maxpool(s2)           -> stride 4
-    layer1                -> stride 4  ← 取「stem+maxpool+layer1」当 f3 给注意力
-    layer2(s2)            -> stride 8  ← 取 layer2 当 bottleneck 给检测
-    layer3/4(s16/s32) 不使用（分辨率太低，本任务用不到）。
-  通道数随深度不同（resnet18/34: 64/128；resnet50/101: 256/512），forward 内自动推断，不写死。
+  VGG-16 features 各 block：
+    block1(conv64×2)+pool -> stride 2
+    block2(conv128×2)+pool -> stride 4  (128 通道) ← 取它当 f3 给注意力
+    block3(conv256×3)+pool -> stride 8  (256 通道) ← 取它当 bottleneck 给检测
+    block4/5 不使用（stride 16/32，分辨率太低，本任务用不到）。
+  因此：注意力 head 输入 = 128 通道，检测 head 输入 mid = 256 通道。
 
-【输入通道】数据集是单通道灰度图；ResNet 第一层要 3 通道，forward 里把灰度复制成 3 通道再喂入。
+【输入通道】数据集是单通道灰度图；VGG 第一层要 3 通道，forward 里把灰度复制成 3 通道再喂入。
 【预训练】默认加载 ImageNet 预训练权重（--no-pretrained 可关闭，离线环境请关闭）。
 
 【检测风格：YOLO 网格 anchor-free】
@@ -72,8 +70,7 @@ TRAIN_FRACS  = [0.80]                     # 训练集占比扫描列表，如 [0
 AUGMENT      = False                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
 RUN_VAL      = False                      # 是否每个 epoch 跑一遍 val（仅打印监控）。还没做自动选参，默认关，省时
-BACKBONE       = "resnet34"              # 主干网络：resnet18 / resnet34 / resnet50（命令行 --backbone 可覆盖）
-RESNET_PRETRAINED = True                # ResNet 是否加载 ImageNet 预训练权重（离线环境改 False / 用 --no-pretrained）
+VGG_PRETRAINED = True                   # VGG-16 是否加载 ImageNet 预训练权重（离线环境改 False / 用 --no-pretrained）
 
 input_size   = (640, 640)
 HM_STRIDE    = 8                    # heatmap 下采样步长
@@ -89,11 +86,11 @@ HM_THRESH    = 0.9                  # YOLO：objectness 解码阈值（sigmoid(o
 BBOX_IOU_THR = 0.5                 # 评测匹配 IoU 阈值
 NMS_IOU_THR  = 0.5                 # YOLO 解码：框级 IoU-NMS 阈值（IoU ≥ 此值的低分框被抑制）
 LAM_NOOBJ    = 0.5                 # YOLO：objectness 损失中 noobj(背景) 项权重，平衡正负样本
-BASE_CH      = 32                   # （ResNet 主干自带固定通道数，此项保留兼容，网络不再使用）
+BASE_CH      = 32                   # （VGG 主干自带固定通道数，此项保留兼容，网络不再使用）
 
 # —— 注意力监督相关（调参核心）——
-LAM_ATT      = [0.3,0.5,1,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
-LAM_ATT      = [0.7]
+LAM_ATT      = [0.3,0.5,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
+#LAM_ATT      = [0.7]        
 LAM_ATT_CUR  = 1.0                  # 占位用。。。运行时当前权重（主循环按 LAM_ATT 逐个设置；compute_loss 实际用它）
 MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
 
@@ -297,56 +294,40 @@ class AugWrapper(Dataset):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. 模型（ResNet 主干）
+# 3. 模型（VGG-16 主干）
 # ══════════════════════════════════════════════════════════════════════════════
-class ResNetBackbone(nn.Module):
-    """ResNet 编码器（默认 resnet18）：输出两个特征
-        f_s4 : stride 4（stem+maxpool+layer1 输出）→ 给注意力 head
-        f_s8 : stride 8（layer2 输出）            → 给 heatmap/wh/offset 检测 head
-    通道数随深度自动推断：resnet18/34 → 64/128；resnet50/101 → 256/512。
-    单通道灰度输入会在 forward 内复制成 3 通道以匹配 ResNet 第一层。
+class VGG16Backbone(nn.Module):
+    """VGG-16 编码器：输出两个特征
+        f_s4 : stride 4（128 通道，VGG block2 池化输出）→ 给注意力 head
+        f_s8 : stride 8（256 通道，VGG block3 池化输出）→ 给 heatmap/wh/offset 检测 head
+    单通道灰度输入会在 forward 内复制成 3 通道以匹配 VGG 第一层。
     """
-    _WEIGHTS = {
-        "resnet18": "ResNet18_Weights",
-        "resnet34": "ResNet34_Weights",
-        "resnet50": "ResNet50_Weights",
-        "resnet101": "ResNet101_Weights",
-    }
-
-    def __init__(self, name="resnet18", pretrained=True):
+    def __init__(self, pretrained=True):
         super().__init__()
-        if name not in self._WEIGHTS:
-            raise ValueError(f"unsupported backbone: {name} (choose from {list(self._WEIGHTS)})")
-        weights = getattr(torchvision.models, self._WEIGHTS[name]).IMAGENET1K_V1 if pretrained else None
-        m = getattr(torchvision.models, name)(weights=weights)
-        # stem(conv1+bn+relu)+maxpool+layer1 → stride4 | layer2 → stride8（layer3/4 不用）
-        self.stage_s4 = nn.Sequential(m.conv1, m.bn1, m.relu, m.maxpool, m.layer1)
-        self.stage_s8 = m.layer2
-        # 通道数从一次 dummy forward 自动推断（兼容 basic/bottleneck 不同深度）
-        with torch.no_grad():
-            d  = torch.zeros(1, 3, 64, 64)
-            s4 = self.stage_s4(d)
-            s8 = self.stage_s8(s4)
-        self.out_ch_s4 = s4.shape[1]
-        self.out_ch_s8 = s8.shape[1]
+        weights = torchvision.models.VGG16_Weights.IMAGENET1K_V1 if pretrained else None
+        feats = torchvision.models.vgg16(weights=weights).features
+        # features 索引：0-4 block1+pool(stride2) | 5-9 block2+pool(stride4,128) | 10-16 block3+pool(stride8,256)
+        self.stage_s4 = feats[0:10]    # 到 block2 的 maxpool（含）→ stride4, 128 通道
+        self.stage_s8 = feats[10:17]   # block3 conv×3 + maxpool      → stride8, 256 通道
+        self.out_ch_s4 = 128
+        self.out_ch_s8 = 256
 
     def forward(self, x):
         if x.shape[1] == 1:
             x = x.repeat(1, 3, 1, 1)        # 灰度 → 3 通道
-        f_s4 = self.stage_s4(x)            # stride4
-        f_s8 = self.stage_s8(f_s4)         # stride8
+        f_s4 = self.stage_s4(x)            # stride4, 128
+        f_s8 = self.stage_s8(f_s4)         # stride8, 256
         return f_s4, f_s8
 
 
 class AttnBBoxNet(nn.Module):
-    def __init__(self, in_ch=1, base_ch=32, use_attn=True, fuse="gate",
-                 pretrained=True, backbone="resnet18"):
+    def __init__(self, in_ch=1, base_ch=32, use_attn=True, fuse="gate", pretrained=True):
         super().__init__()
         self.use_attn = use_attn
         self.fuse = fuse                       # "gate"(乘法门控) 或 "concat"(通道拼接+1x1融合)
-        self.backbone = ResNetBackbone(name=backbone, pretrained=pretrained)
-        c4  = self.backbone.out_ch_s4          # stride4 特征通道（注意力 head 输入）
-        mid = self.backbone.out_ch_s8          # stride8 特征通道（检测 head 输入）
+        self.backbone = VGG16Backbone(pretrained=pretrained)
+        c4  = self.backbone.out_ch_s4          # 128：stride4 特征通道（注意力 head 输入）
+        mid = self.backbone.out_ch_s8          # 256：stride8 特征通道（检测 head 输入）
         if use_attn:
             self.attn_head = nn.Sequential(
                 nn.Conv2d(c4, c4 // 2, 3, padding=1, bias=False),
@@ -366,7 +347,7 @@ class AttnBBoxNet(nn.Module):
             nn.BatchNorm2d(mid // 4), nn.ReLU(inplace=True), nn.Conv2d(mid // 4, 2, 1))
 
     def forward(self, x):
-        f3, feat = self.backbone(x)            # f3: stride4 给注意力 | feat: stride8 给检测
+        f3, feat = self.backbone(x)            # f3: stride4(128ch) 给注意力 | feat: stride8(256ch) 给检测
         a_logit = None
         if self.use_attn:
             a_logit = self.attn_head(f3)
@@ -434,7 +415,7 @@ def compute_loss(model, img, hm, wh, off, peak, band, attn_mode):
 # 5. 训练
 # ══════════════════════════════════════════════════════════════════════════════
 def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, fuse="gate",
-                run_val=False, pretrained=True, backbone="resnet18"):
+                run_val=False, pretrained=True):
     set_seed(seed)
     use_attn = (attn_mode != "none")
     tr_set = Subset(full, tr)
@@ -450,7 +431,7 @@ def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, f
                      persistent_workers=(NUM_WORKERS > 0), worker_init_fn=_worker_init,
                      collate_fn=collate) if run_val else None)
     model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=use_attn, fuse=fuse,
-                        pretrained=pretrained, backbone=backbone).to(device)
+                        pretrained=pretrained).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     for ep in range(1, n_ep + 1):
         model.train(); tr_tot = 0.0
@@ -572,16 +553,13 @@ def main():
                         help="每个 epoch 跑一遍 val 做监控打印（不参与选模型），默认关闭")
     parser.add_argument("--lam_att", nargs="+", type=float, default=LAM_ATT,
                         help="注意力 loss 权重扫描列表，如 --lam_att 0.3 0.5 2；默认取文件里的 LAM_ATT")
-    parser.add_argument("--backbone", default=BACKBONE,
-                        choices=["resnet18", "resnet34", "resnet50", "resnet101"],
-                        help="ResNet 主干深度，默认 resnet18")
-    parser.add_argument("--no-pretrained", dest="pretrained", action="store_false", default=RESNET_PRETRAINED,
-                        help="不加载 ResNet 的 ImageNet 预训练权重（离线环境用）")
+    parser.add_argument("--no-pretrained", dest="pretrained", action="store_false", default=VGG_PRETRAINED,
+                        help="不加载 VGG-16 的 ImageNet 预训练权重（离线环境用）")
     parser.add_argument("--train_fracs", nargs="+", type=float, default=TRAIN_FRACS,
                         help="训练集占比扫描列表，如 --train_fracs 0.3 0.5 0.7；其余为 test（val=0）。默认取文件里的 TRAIN_FRACS")
     args = parser.parse_args()
 
-    work = os.path.join(os.getcwd(), f"attn_cnn_yolo_{args.backbone}_{datetime.now().strftime('%m%d_%H%M')}")
+    work = os.path.join(os.getcwd(), f"attn_cnn_yolo_vgg16_{datetime.now().strftime('%m%d_%H%M')}")
     os.makedirs(work, exist_ok=True)
     # 把本次运行用的脚本快照复制到结果目录，便于复现（结果与代码一一对应）
     import shutil
@@ -589,7 +567,7 @@ def main():
     print("Using device:", device)
     full = AttnDataset(input_size=input_size, hm_stride=HM_STRIDE, sigma=HM_SIGMA)
     n = len(full)
-    print(f"[yolo-{args.backbone}] n_total={n}  modes={args.modes}  seeds={args.seeds}  train_fracs={args.train_fracs}  "
+    print(f"[yolo-vgg16] n_total={n}  modes={args.modes}  seeds={args.seeds}  train_fracs={args.train_fracs}  "
           f"margin={MARGIN}  lam_att_sweep={args.lam_att}  augment={args.augment}  fuse={args.fuse}  "
           f"run_val={args.val}  pretrained={args.pretrained}", flush=True)
 
@@ -612,7 +590,7 @@ def main():
                 tag = f"frac{frac}_seed{seed}_none"
                 model = train_model("none", full, tr, va, args.epochs, work, tag, seed,
                                      augment=args.augment, fuse=args.fuse, run_val=args.val,
-                                     pretrained=args.pretrained, backbone=args.backbone)
+                                     pretrained=args.pretrained)
                 m = evaluate(model, full, te)
                 gap = attn_gap(model, full, te)
                 print(f"  frac{frac} seed{seed} none: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "
@@ -629,7 +607,7 @@ def main():
                     tag = f"frac{frac}_seed{seed}_{attn_mode}_lam{lam}"
                     model = train_model(attn_mode, full, tr, va, args.epochs, work, tag, seed,
                                          augment=args.augment, fuse=args.fuse, run_val=args.val,
-                                         pretrained=args.pretrained, backbone=args.backbone)
+                                         pretrained=args.pretrained)
                     m = evaluate(model, full, te)
                     gap = attn_gap(model, full, te)
                     print(f"  frac{frac} lam{lam} seed{seed} {attn_mode:>4}: P={m['bbox_P']:.4f} R={m['bbox_R']:.4f} "

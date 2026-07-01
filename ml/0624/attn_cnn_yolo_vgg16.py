@@ -89,8 +89,8 @@ LAM_NOOBJ    = 0.5                 # YOLO：objectness 损失中 noobj(背景) �
 BASE_CH      = 32                   # （VGG 主干自带固定通道数，此项保留兼容，网络不再使用）
 
 # —— 注意力监督相关（调参核心）——
-LAM_ATT      = [0.3,0.5,1,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
-LAM_ATT      = [0.7]        
+LAM_ATT      = [0.3,0.5,3,5]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
+#LAM_ATT      = [0.7]        
 LAM_ATT_CUR  = 1.0                  # 占位用。。。运行时当前权重（主循环按 LAM_ATT 逐个设置；compute_loss 实际用它）
 MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
 
