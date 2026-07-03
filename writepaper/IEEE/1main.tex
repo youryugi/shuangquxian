@@ -342,7 +342,7 @@ where $\lambda_{\mathrm{att}}$ controls the relative weight of the attention sup
 The experiments are conducted on a publicly available GPR dataset for intelligent recognition of subsurface utilities~\cite{dataset}.
 The dataset consists of labeled GPR B-scan images collected from real urban and industrial environments using ground-coupled antennas operating at 200~MHz and 400~MHz.
 
-
+%需要假如神经网络的参数表
 
 \subsection{Detection performance}
 % 表展示了不同训练数据比例下的检测性能。可以看出，在所有训练数据比例下，本文方法均优于基线方法。
@@ -355,11 +355,28 @@ The dataset consists of labeled GPR B-scan images collected from real urban and 
 % 这可能时因为测试数据集样本量较少，导致评估结果不稳定。
 
 % 以上结果的是在lambda=0.7的情况下得到的。我们还进行了lambda参数敏感性分析在后文中说明。
-Table~\ref{tab:bbox_results} reports the detection performance under different training-data ratios. As can be observed, the proposed method consistently outperforms the baseline across all training-data ratios. The improvement in F1-score is most pronounced at a training-data ratio of 0.7, where our method achieves 0.84 compared with 0.68 for the baseline. The training stability is also notably enhanced, with the standard deviation decreasing from 0.21 to 0.03. This gain is primarily attributed to the improvement in recall, as the attention constraint guides the network to focus on the hyperbola-band regions and thereby reduces missed detections, which demonstrates the effectiveness of the proposed method.
+Table~\ref{tab:bbox_results} reports the detection performance under different training-data ratios. 
+We report Precision, Recall, and F1-score. 
+A prediction is counted as a true positive if its intersection over union (IoU) 
+with an unmatched ground-truth box is $\geq 0.5$, 
+following a greedy one-to-one matching in descending order of confidence; 
+each ground-truth box can be matched at most once. 
+Unmatched predictions and ground-truth boxes are counted as false positives and false negatives, respectively.
+As can be observed, the proposed method consistently outperforms the baseline across all training-data ratios. 
+The improvement in F1-score is most pronounced at a training-data ratio of 0.7, 
+where our method achieves 0.84 compared with 0.68 for the baseline. 
+The training stability is also notably enhanced, with the standard deviation decreasing from 0.21 to 0.03. 
+This gain is primarily attributed to the improvement in recall, 
+as the attention constraint guides the network to focus on the hyperbola-band regions 
+and thereby reduces missed detections, which demonstrates the effectiveness of the proposed method.
 
-Nevertheless, at a training-data ratio of 0.9, no significant improvement is observed and the stability is relatively poor. This is presumably due to the limited number of samples in the test set, which leads to unstable evaluation results. 
+Nevertheless, at a training-data ratio of 0.9, no significant improvement is observed 
+and the stability is relatively poor. 
+This is presumably due to the limited number of samples in the test set, 
+which leads to unstable evaluation results. 
 
-It should be noted that the above results are obtained with $\lambda_{\mathrm{att}}=0.7$; a sensitivity analysis of the parameter $\lambda$ is further presented in the following section.
+It should be noted that the above results are obtained with $\lambda_{\mathrm{att}}=0.7$; 
+a sensitivity analysis of the parameter $\lambda$ is further presented in the following section.
 
 \begin{table*}[]
 \centering
@@ -396,7 +413,30 @@ $\lambda_{\mathrm{att}}=0.7$. The best F1 per row is shown in \textbf{bold}.}
 \subsection{Comparison of Detection Performance with Different Attention Modules}
 %和其他注意力机制比较  ok
 %表~\ref{tab:attention_comparison} 将本文方法与若干已在探地雷达、SAR 及遥感识别中得到应用的代表性注意力模块进行了对比:Pan et al. 采用通道注意力 SE,N. Wang et al. 采用通道—空间注意力 CBAM,Z. Wang et al. 采用非局部注意力 Non-local,Shen et al. 采用坐标注意力 CA。为公平比较,我们将上述注意力模块在相同骨干网络的同一位置进行复现,并在本文双曲线数据集上以完全一致的训练与评估设置进行实验,表中所有结果均由本文复现得到。本文方法在精确率、召回率和 F1 上均取得最优,F1 达到 0.89,较次优方法提升约 9%。现有模块普遍难以兼顾精确率与召回率,而本文方法同时获得最高的精确率与召回率,且 F1 标准差最低,兼具更高的检测精度与稳定性。究其原因,SE、CBAM、Non-local 与 CA 均属于自学习的注意力机制,仅依据特征自身对通道或空间进行重加权,缺乏关于"应关注何处"的显式指导;而本文方法通过双曲线条带掩膜对注意力分支施加显式监督,直接引导网络聚焦于双曲线目标区域,从而优于这些通用注意力模块。
-As shown in Table~\ref{tab:attention_comparison}, we compare the proposed method with several representative attention modules that have been applied to ground-penetrating radar, SAR, and remote-sensing recognition: Pan et al. adopt the channel attention SE, N. Wang et al. adopt the channel–spatial attention CBAM, Z. Wang et al. adopt the non-local attention Non-local, and Shen et al. adopt the coordinate attention CA. For a fair comparison, we re-implement these attention modules at the same position within an identical backbone and evaluate them on our hyperbola dataset under exactly the same training and evaluation settings, so that all results reported in the table are obtained by our own re-implementation. The proposed method achieves the best precision, recall, and F1, reaching an F1 of 0.89 with an improvement of about 9\% over the second-best method. Whereas the existing modules generally struggle to balance precision and recall, our method attains the highest precision and recall simultaneously, together with the lowest F1 standard deviation, thus offering both higher detection accuracy and greater stability. This can be attributed to the fact that SE, CBAM, Non-local, and CA are all self-learned attention mechanisms that merely re-weight channel or spatial features according to the features themselves, without explicit guidance on where to attend; in contrast, our method imposes explicit supervision on the attention branch through the hyperbola-band mask, directly guiding the network to focus on the hyperbolic target regions and thereby outperforming these generic attention modules.
+As shown in Table~\ref{tab:attention_comparison}, 
+we compare the proposed method with several representative attention modules 
+that have been applied to ground-penetrating radar, SAR, and remote-sensing recognition: 
+Pan et al. adopt the channel attention SE, 
+N. Wang et al. adopt the channel–spatial attention CBAM, 
+Z. Wang et al. adopt the non-local attention Non-local, 
+and Shen et al. adopt the coordinate attention CA. 
+For a fair comparison, we re-implement these attention modules at the same position 
+within an identical backbone and evaluate them on our hyperbola dataset 
+under exactly the same training and evaluation settings, 
+so that all results reported in the table are obtained by our own re-implementation. 
+The proposed method achieves the best precision, recall, and F1, 
+reaching an F1 of 0.89 with an improvement of about 9\% over the second-best method. 
+Whereas the existing modules generally struggle to balance precision and recall, 
+our method attains the highest precision and recall simultaneously, 
+together with the lowest F1 standard deviation, 
+thus offering both higher detection accuracy and greater stability. 
+This can be attributed to the fact that SE, CBAM, Non-local, and CA are 
+all self-learned attention mechanisms that merely re-weight channel or spatial features according 
+to the features themselves, without explicit guidance on where to attend. 
+In contrast, our method imposes explicit supervision on the attention branch 
+through the hyperbola-band mask, directly guiding the network to 
+focus on the hyperbolic target regions and thereby outperforming these generic attention modules.
+
 \begin{table}[]
 \caption{Comparison of Detection Performance with Different Attention Modules}
 \label{tab:attention_comparison}
@@ -420,9 +460,6 @@ Shen et al.~\cite{CA}    & $0.80 \pm 0.23$ & $0.84 \pm 0.09$ & $0.80 \pm 0.17$ \
 %\subsection{Result4}
 %放在其他的预训练的backbone中也有效 ok
 
-%\subsection{Result3}
-
-
 \subsection{Sensitivity analysis of the parameter $\lambda$}
 %参数敏感性分析 lam 从0.1开始嘛 ok
 % 图~\ref{fig:lambda} 给出了注意力约束权重 $\lambda$ 从 0.1 到 10 变化时检测 F1 的分布,其中每个取值均在 10 个随机种子上统计,$\lambda=0$ 对应基线。可以看出,在整个取值范围内,引入注意力约束后的 F1 中位数均稳定在 0.78 至 0.84 之间,显著高于基线的 0.68,表明本文方法对 $\lambda$ 的选取并不敏感,在较宽的参数区间内均能带来稳定的性能提升。其中 $\lambda=0.7$ 取得最高的中位 F1 0.84,且分布最为集中,标准差仅为 0.03;当 $\lambda$ 过小时约束偏弱,增益有限;当 $\lambda$ 过大时则略微挤压主检测任务,使 F1 回落至约 0.79,说明存在一个位于中间的最优区间。综合性能与稳定性,本文最终将 $\lambda=0.7$ 作为默认设置。
@@ -434,8 +471,9 @@ Fig.~\ref{fig:lambda} illustrates the distribution of the detection F1 as the at
 \label{fig:lambda}
 \end{figure}
 
-
-\subsection{Result3}
+\subsection{Visualization of attention maps}
+%0-88可能可以0630的结果
+\subsection{Ablation study of NN parameters?}
 %软性的约束是不是可能会更加好 如果lam参数调节好的话
 \section{Discussion}
 %讨论为什么不直接预测双曲线--面前主流的任务还是用bbox
