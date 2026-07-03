@@ -49,91 +49,8 @@ Article submission, IEEE, IEEEtran, journal, \LaTeX, paper, template, typesettin
 \end{IEEEkeywords}
 
 \section{Introduction}
-% 随着城市地下空间精细化管理、交通基础设施服役状态评估与岩土工程勘察的需求不断提升，高效可靠的地下无损探测技术已成为工程领域的重要研究方向。探地雷达（Ground Penetrating Radar, GPR）凭借非侵入、探测效率高、分辨率适中等技术优势，广泛应用于地下管线探测、道路内部病害检测、隧道衬砌质量检测与隐蔽工程勘察等场景。实际探测中，天线沿测线移动并在每个位置发射电磁脉冲、采集地下介质的反射回波；将连续的单道回波数据沿测线方向并排堆叠，便得到二维 B-scan 图像。其横轴对应天线的空间位置，纵轴对应电磁波的双程走时，可等效为地下深度。
-% 对于管线、钢筋等紧凑地下目标，当天线位于其正上方时电磁波往返路径最短、对应走时最小，向两侧移动时路径对称增大、走时随之增加，因此其反射回波在 B-scan 中呈现为开口向下的双曲线，顶点即对应目标的正上方投影。也正因如此，双曲线检测成为地下目标定位、埋深估计与参数重建的关键前置步骤。
+\IEEEPARstart{T}{his} file is intended to serve as a ``sample article file''
 
-
-% 早期双曲线检测主要依赖手工设计特征与解析曲线拟合，例如 Hough 变换投票、预设模板匹配、HOG 特征结合 SVM 分类等。这类方法在理想实验条件下具备明确的可解释性，但工程局限性突出：不仅计算开销大、对参数离散精度敏感，且检测效果强依赖人工预设的先验模板，面对地下介质不均、杂波干扰强的现场实测数据时，性能衰减十分明显。
-
-% 随着深度学习的发展，端到端的目标检测方法被广泛迁移至 B-scan 双曲线识别任务，在检测效率与定位精度上取得了显著提升。但现有研究普遍直接沿用面向自然图像的矩形框作为标注与输出形式，并未针对双曲线的几何特性做适配。矩形框仅能粗略框定回波的空间范围，其内部包含大量非目标背景区域，既无法提供顶点位置、曲率、条带厚度等精细的几何监督信息，也使得模型难以聚焦于双曲线本身的结构特征进行学习，制约了检测精度的进一步提升，也导致模型在数据量有限的场景下稳定性较差。
-
-% 与此同时，注意力机制已成为提升 GPR 双曲线检测性能的常用技术手段通过通道或空间维度的特征重加权实现注意力分配,增强目标相关特征、抑制无关背景噪声。但由于缺乏明确的目标几何先验引导，效果并不稳定。
-
-% 针对上述不足,本文提出一种双曲线带注意力监督方法:在标注端以少量参数直接记录双曲线的几何形状,在学习端将该几何信息转化为注意力分支的监督信号,提升检测性能。本文的主要贡献如下:
-
-% 1.设计了一种面向双曲线带状目标的专用标注工具。该工具以顶点坐标、斜率、跨度、厚度等少量可解释参数定义双曲线条带，支持交互式快速调整，可同步导出形状参数与派生矩形边界框。
-% 2.提出了一种基于几何先验的显式注意力监督机制。通过参数化标注生成的双曲线条带掩膜直接约束注意力分布，为检测网络注入明确的目标空间先验，在端到端训练中提升检测性能.
-% 3.在公开 GPR 数据集上的实验表明，所提方法在训练比例为 0.7 时将 F1 值由 0.68 提升至 0.84，模型稳定性显著提升；性能优于多种主流注意力模块，验证了所提方法的有效性。
-\IEEEPARstart{W}{ith} the growing demand for refined management of urban underground space, 
-service condition assessment of transportation infrastructure, and geotechnical engineering investigation, 
-efficient and reliable underground nondestructive testing technologies have become a prominent research 
-direction in the engineering field~\cite{lai2018review}. 
-Ground Penetrating Radar (GPR), favored for its non-intrusive nature, high survey efficiency, and moderate spatial resolution, 
-is widely applied in scenarios such as underground pipeline detection, road internal defect inspection, tunnel lining quality assessment, 
-and concealed engineering investigation~\cite{rasol2022road,travassos2021review}. 
-During field surveys, the antenna moves along a survey line, 
-emitting electromagnetic pulses and collecting reflected echoes from subsurface media at each position. 
-By stacking consecutive single-trace echoes side by side along the survey line, 
-a two-dimensional B-scan image is obtained, where the horizontal axis corresponds to the spatial position of the antenna, 
-and the vertical axis represents the two-way travel time of electromagnetic waves, 
-which can be equivalently converted to subsurface depth.
-
-For compact subsurface targets such as pipelines and rebars, 
-the round-trip path of electromagnetic waves is the shortest when the antenna is directly above the target, 
-corresponding to the minimum travel time. 
-As the antenna moves laterally away from the target, 
-the path length increases symmetrically and the travel time rises accordingly. 
-As a result, the reflected echoes of such targets appear as downward-opening hyperbolas in B-scan images, 
-with the apex corresponding to the vertical projection of the target. 
-For this reason, hyperbola detection serves as a critical prerequisite for subsurface target localization, 
-depth estimation, and parameter reconstruction~\cite{tong2020survey}.
-
-Early hyperbola detection methods mainly relied on hand-crafted features and analytical curve fitting, 
-typical examples including Hough transform voting, predefined template matching, 
-and HOG features combined with SVM classification~\cite{travassos2021review}. 
-While these methods offer clear interpretability under ideal experimental conditions, 
-they suffer from notable practical limitations: they incur high computational costs, 
-are sensitive to the discretization precision of parameters, 
-and their performance heavily depends on manually designed prior templates~\cite{tong2020survey}. 
-When applied to field data with heterogeneous subsurface media and strong clutter interference, 
-their performance degrades significantly.
-
-With the development of deep learning, 
-end-to-end object detection methods have been widely adapted for 
-B-scan hyperbola recognition~\cite{besaw2015deep,redmon2016yolo,redmon2018yolov3,bochkovskiy2020yolov4}, 
-delivering remarkable improvements in detection efficiency and localization accuracy. 
-However, existing studies generally adopt rectangular bounding boxes designed for natural images as the annotation and output format~\cite{redmon2016yolo}, 
-without tailoring the scheme to the geometric properties of hyperbolas. 
-A rectangular box can only roughly delineate the spatial range of an echo, 
-enclosing a large amount of non-target background area. 
-It neither provides fine-grained geometric supervision such as vertex position, curvature, or band thickness, 
-nor enables the model to focus on learning the structural characteristics of hyperbolas themselves, 
-which restricts further improvement of detection accuracy and leads to poor model stability in scenarios with limited data.
-
-Meanwhile, attention mechanisms have become a common approach to enhancing GPR hyperbola detection performance~\cite{hu2018senet,woo2018cbam,wang2020eca,hou2021coordinate,vaswani2017attention,wang2018nonlocal}. 
-They reweight features along the channel or spatial dimensions to amplify target-relevant features and suppress irrelevant background noise. 
-Nevertheless, due to the lack of explicit guidance from target geometric priors, 
-their performance remains inconsistent across different scenarios.
-
-To address the aforementioned limitations, this paper proposes a hyperbola-band attention supervision method. 
-On the annotation side, the geometric shape of each hyperbola is encoded with a small set of parameters; 
-on the learning side, this geometric information is converted into supervisory signals for an attention branch 
-to boost detection performance. 
-
-The main contributions of this work are summarized as follows:
-
-\begin{enumerate}
-\item A dedicated annotation tool is developed for hyperbola-band targets. 
-It defines each hyperbolic band using a small set of interpretable parameters, 
-including vertex coordinates, slope, horizontal span, and band thickness, 
-supports interactive adjustment, and exports both shape parameters and derived rectangular bounding boxes simultaneously.
-\item An explicit attention supervision mechanism based on geometric priors is proposed. 
-Hyperbola-band masks generated from parametric annotations directly constrain the attention distribution, 
-injecting explicit spatial priors of targets into the detection network and improving detection performance via end-to-end training.
-\item Experiments on a public GPR dataset show that the proposed method improves the F1-score from 0.68 to 0.84 at a training ratio of 0.7, 
-with a notable enhancement in model stability. It also outperforms multiple mainstream attention modules, 
-which validates the effectiveness of the proposed method.
-\end{enumerate}
 
 \section{Related work}
 \subsection{Hyperbola recognition task}
@@ -143,6 +60,8 @@ which validates the effectiveness of the proposed method.
 \caption{Formation of a GPR B-scan.}
 \label{fig:bscan}
 \end{figure*}
+#这个不知道要不要引用
+Utilizing electromagnetic wave reflections arising from dielectric permittivity contrasts at material interfaces, Ground Penetrating Radar (GPR) has become a widely deployed non-destructive technique for mapping geological structures and identifying buried objects.
 
 Ground-penetrating radar (GPR) forms a subsurface image by moving a transmitter/receiver (Tx/Rx) antenna along a survey line: at each position $T_0,T_1,T_2,\dots$ it emits an electromagnetic pulse and records the reflected signal as a single trace (an A-scan) of amplitude versus two-way travel time. Stacking consecutive traces side by side yields a B-scan, whose horizontal axis is the trace number (antenna position) and whose vertical axis is travel time, which is monotonically related to depth. Because a compact buried target is illuminated from many antenna positions, its round-trip distance is shortest directly above the object and increases symmetrically to either side, so the target's reflection is imaged as a downward-opening hyperbola (Fig.~\ref{fig:bscan}).
 
