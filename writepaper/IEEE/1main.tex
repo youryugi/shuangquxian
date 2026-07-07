@@ -139,7 +139,7 @@ which validates the effectiveness of the proposed method.
 \subsection{Hyperbola recognition task}
 \begin{figure*}[]
 \centering
-\includegraphics[width=0.9\linewidth]{bscan.png}
+\includegraphics[width=0.9\linewidth, trim={0 40 0 20}, clip]{bscan.png}
 \caption{Formation of a GPR B-scan.}
 \label{fig:bscan}
 \end{figure*}
@@ -165,10 +165,30 @@ Attention mechanisms are increasingly embedded into task-specific GPR pipelines 
 More recent designs tailor attention specifically to hyperbolic geometry and apex-localization objectives that are closely aligned with our study. A rebar-recognition model emphasizes hyperbolic features with deformable attention and a hyperbolic attention transformer before proposal generation \cite{li2025rebar}, a lightweight dual-task keypoint detector couples attention-enhanced features with keypoint regression for precise vertex localization \cite{hou2025endtoend}, and a state-space detector for arbitrarily long B-scans targets hyperbola vertex estimation directly \cite{lan2024statespace}. The clear trend is a shift from generic channel or spatial reweighting toward physically informed designs that encode hyperbolic structure and apex localization, while traditional fitting-based pipelines remain relevant for their geometric interpretability \cite{lei2019autohyperbola}. This motivates our approach: instead of localizing the echo through rectangular proxies or post-hoc curve fitting, we represent the hyperbola by its strip-like, symmetric, parametric shape, so that both annotation and learning are aligned with the geometry of the target.
 
 
-\subsection{Labelling tools}
-Supervised detectors depend on large sets of manually annotated images, and a range of general-purpose annotation tools has been developed to meet this need. Early web-based systems such as LabelMe established collaborative image labelling at scale \cite{russell2008labelme}, and the annotation pipeline behind large benchmarks like MS-COCO further standardized bounding-box, polygon, and segmentation-mask labelling \cite{lin2014coco}. Building on these efforts, widely used open-source tools including LabelImg \cite{tzutalin2015labelimg}, Labelme \cite{wada2016labelme}, the VGG Image Annotator \cite{dutta2019via}, and CVAT \cite{cvat} provide interactive interfaces for the common geometric primitives: axis-aligned rectangles, polygons, key points, and pixel-wise masks. These primitives are generic and domain-agnostic, which is exactly what makes the tools broadly applicable across natural-image tasks.
+\subsection{Annotation of hyperbolic reflections}
+Training a detection model requires large quantities of manually annotated images,
+and a variety of general-purpose annotation tools have been developed to meet this need.
+Early systems such as LabelMe enabled collaborative image labelling at scale \cite{russell2008labelme},
+and the annotation pipelines behind large-scale benchmarks such as Microsoft common objects in context (MS-COCO)
+further standardized this process \cite{lin2014coco}.
+Building on these efforts, widely used open-source tools such as LabelImg \cite{tzutalin2015labelimg}
+and the computer vision annotation tool (CVAT) \cite{cvat} offer interactive interfaces for a common set of
+geometric shapes: axis-aligned rectangles, polygons, key points, and pixel-wise masks.
+Being generic and domain-agnostic, these shapes are precisely 
+what makes such tools broadly applicable across natural-image tasks.
 
-In GPR interpretation, hyperbolic reflections are usually annotated with these same general-purpose tools; bounding boxes drawn in software such as LabelImg are the de facto standard for labelling subsurface targets in B-scans \cite{CBAM}. A rectangle, however, records only the extent of the echo rather than its strip-like, symmetric, and parametric geometry, so the resulting labels are misaligned with the physical shape of the hyperbola and cannot directly provide geometric supervision such as vertex position, curvature, or band thickness. Polygon and mask tools can trace the curve more tightly, but they require dense per-instance clicking and still do not expose the underlying hyperbola parameters. This gap between the geometry-agnostic primitives offered by existing tools and the parametric, band-shaped nature of hyperbolic targets motivates the dedicated annotation tool proposed in this work, which lets annotators place and adjust a parametric hyperbola band through a few interpretable controls and export both the shape parameters and the derived bounding box.
+In GPR interpretation, hyperbolic reflections are typically annotated with these same general-purpose shapes.
+Bounding boxes remain the most common choice for subsurface targets in B-scans~\cite{besaw2015deep},
+whereas a growing body of work instead marks the apex of each hyperbola as a keypoint and treats it as
+the localization target~\cite{hou2025endtoend,lan2024statespace}; segmentation masks have also been used to
+delineate the hyperbola or its apex region more tightly~\cite{hou2021msrcnn}.
+Each of these schemes, however, captures only part of the geometry: a bounding box records merely the extent
+of the echo, a single keypoint pins down only the apex while discarding the opening and curvature of the curve,
+and segmentation masks demand dense per-instance labelling yet still do not expose the underlying hyperbola parameters.
+None of them aligns with the parametric, band-shaped nature of the hyperbola or offers direct geometric supervision.
+This mismatch motivates the dedicated annotation tool proposed in this work, which allows annotators to place and
+adjust a parametric hyperbola band through a few interpretable controls, and to export both the shape parameters
+and the derived bounding box.
 
 
 \section{Proposed method}
@@ -344,8 +364,32 @@ The dataset used in this study is a publicly available GPR dataset obtained from
 comprising 318 B-scan images in total.
 For each experiment, the images are randomly split into a training set according to a specified ratio, 
 with the remaining images used as the test set. All experiments are conducted under ten random seeds, 
-and the reported results are averaged over the ten runs, 
+and the reported results are averaged over the ten runs,
 with the corresponding standard deviations provided.
+For evaluation, a predicted box is counted as a true positive if its intersection-over-union (IoU)
+with a ground-truth box is at least 0.5, and each ground-truth box can be matched at most once;
+precision, recall, and F1-score are then computed accordingly.
+
+All experiments are implemented in PyTorch and run on a single NVIDIA GeForce RTX 5060 Ti GPU (8 GB)
+with an AMD Ryzen 7 9800X3D CPU.
+The main training settings are summarized in Table~\ref{tab:impl}.
+
+\begin{table}[]
+\caption{Training Settings}
+\label{tab:impl}
+\centering
+\begin{tabular}{ll}
+\toprule
+Item & Setting \\
+\midrule
+Optimizer & Adam \\
+Learning rate & $5\times10^{-4}$ \\
+Batch size & 8 \\
+Training epochs & 100 \\
+Mixed precision & bfloat16 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Detection performance}
 % 表展示了不同训练数据比例下的检测性能。可以看出，在所有训练数据比例下，本文方法均优于基线方法。
@@ -372,7 +416,7 @@ no significant improvement is observed and the stability is relatively poor.
 This is presumably due to the limited number of samples in the test set, 
 which leads to unstable evaluation results. 
 
-It should be noted that the above results are obtained with $\lambda_{\mathrm{att}}=0.7$; 
+It should be noted that the above results are obtained with $\lambda=0.7$; 
 a sensitivity analysis of the parameter $\lambda$ is further presented in Section~\ref{lambda}.
 
 \begin{table*}[]
@@ -509,7 +553,7 @@ in consideration of both accuracy and stability.
 \begin{figure}
 \centering
 \includegraphics[width=1\linewidth]{boxplot_f1_none_vs_abs_lam.pdf}
-\caption{lambda}
+\caption{Sensitivity of the detection F1 to the attention-constraint weight $\lambda$.}
 \label{fig:lambda}
 \end{figure}
 
