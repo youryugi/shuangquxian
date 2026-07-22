@@ -24,45 +24,55 @@ RECT_SEL      = (255, 200, 0, 220)
 
 
 # ---------------------------------------------------------------------------
-# True-hyperbola model
+# GPR true-hyperbola model (single shape parameter: slope)
+#
+#   A GPR reflection from a point / cylindrical target is a hyperbola whose
+#   physical DOF are only (x0, t0, v): apex position, apex two-way time and
+#   wave velocity.  With the image top taken as the surface (time-zero), the
+#   apex depth t0 equals the vertical semi-axis, so:
+#
+#       a = y_vertex                 (vertical semi-axis = apex depth)
+#       b = y_vertex / slope         (slope = a/b = 2/v encodes velocity)
 #
 #   Centerline (downward-opening upper branch, apex at the top):
 #       y_c(x) = y_v + a * ( sqrt(1 + ((x - x_v) / b)^2) - 1 )
 #
-#   At x = x_v -> y_c = y_v (apex).  As |x - x_v| grows the curve approaches
-#   the asymptotes with slope a / b, which physically encodes the medium wave
-#   velocity of the GPR hyperbola (asymptote slope = 2 / v).
+#   So once the apex is clicked, a single "slope" fully fixes the shape; the
+#   apex curvature follows automatically (kappa = slope^2 / (2 * y_v)).
 #
 #   Parameters:
 #       x_vertex, y_vertex : apex pixel coordinates
-#       a                  : vertical semi-axis   (~ apex two-way travel time)
-#       b                  : horizontal semi-axis (~ target depth)
-#       span               : horizontal span used to draw / truncate the arms
+#       slope              : asymptote slope a/b (velocity)
+#       span               : horizontal extent used to draw / truncate the arms
 #       thickness          : vertical band thickness
 #
 #   The band is a vertical ribbon: { (x, y) : |y - y_c(x)| <= thickness / 2 }.
 # ---------------------------------------------------------------------------
 
-def hyperbola_yc(x, x_vertex, y_vertex, a, b):
-    b = max(1e-6, b)
-    return y_vertex + a * (math.sqrt(1.0 + ((x - x_vertex) / b) ** 2) - 1.0)
+def hyperbola_ab(y_vertex, slope):
+    """Physical semi-axes from apex depth and slope (surface = image top)."""
+    a = max(1.0, abs(y_vertex))
+    s = max(1e-3, slope)
+    return a, a / s
 
 
 def normalize_obj(obj):
-    """Normalize legacy fields (width->span) and fill in a/b for old schema."""
+    """Normalize legacy fields (width->span, a/b/height -> slope)."""
     obj = dict(obj)
     # Legacy field rename: width -> span (horizontal draw extent).
     if "span" not in obj and "width" in obj:
         obj["span"] = obj["width"]
     obj.setdefault("span", 100.0)
-    if "a" not in obj or "b" not in obj:
-        # Old format had {..., width/span, height, thickness} where the centerline
-        # was the parabola y_v + height * (dx)^2.  Match the near-apex curvature:
-        # pick b = half_w and a = 2 * height (so a/(2 b^2) = height/half_w^2).
-        half_w = max(1.0, obj["span"] / 2.0)
-        height = obj.get("height", 40.0)
-        obj.setdefault("a", round(2.0 * height, 2))
-        obj.setdefault("b", round(half_w, 2))
+    if "slope" not in obj:
+        if "a" in obj and obj.get("b"):
+            # Previous two-semi-axis schema.
+            obj["slope"] = round(obj["a"] / obj["b"], 2)
+        elif "height" in obj:
+            # Old parabola schema y_v + height * (dx)^2.
+            half_w = max(1.0, obj["span"] / 2.0)
+            obj["slope"] = round(2.0 * obj["height"] / half_w, 2)
+        else:
+            obj["slope"] = 1.0
     return obj
 
 
@@ -70,8 +80,7 @@ def hyperbola_to_bbox(obj):
     """Derive axis-aligned bounding box from a hyperbola annotation."""
     obj = normalize_obj(obj)
     half_w = obj["span"] / 2.0
-    a = obj["a"]
-    b = max(1e-6, obj["b"])
+    a, b = hyperbola_ab(obj["y_vertex"], obj["slope"])
     y_edge = obj["y_vertex"] + a * (math.sqrt(1.0 + (half_w / b) ** 2) - 1.0)
     x1 = obj["x_vertex"] - half_w
     y1 = obj["y_vertex"] - obj["thickness"] / 2.0
@@ -117,8 +126,7 @@ class HyperbolaAnnotator:
 
         self.var_x         = tk.DoubleVar(value=200)
         self.var_y         = tk.DoubleVar(value=200)
-        self.var_a         = tk.DoubleVar(value=80)   # vertical semi-axis
-        self.var_b         = tk.DoubleVar(value=60)   # horizontal semi-axis
+        self.var_slope     = tk.DoubleVar(value=1.0)  # asymptote slope a/b
         self.var_span      = tk.DoubleVar(value=200)  # horizontal draw extent
         self.var_thickness = tk.DoubleVar(value=12)
         self.var_name      = tk.StringVar(value="hyperbola")
@@ -175,13 +183,9 @@ class HyperbolaAnnotator:
 
         self._make_slider(self.control_frame, "x_vertex",  self.var_x,         row, 0, 1000); row += 1
         self._make_slider(self.control_frame, "y_vertex",  self.var_y,         row, 0, 1000); row += 1
-        self._make_slider(self.control_frame, "a (vert)",  self.var_a,         row, 1, 500);  row += 1
-        self._make_slider(self.control_frame, "b (horiz)", self.var_b,         row, 1, 500);  row += 1
-        self._make_slider(self.control_frame, "span",      self.var_span,      row, 10, 600); row += 1
+        self._make_slider(self.control_frame, "slope",     self.var_slope,     row, 0.1, 20);  row += 1
+        self._make_slider(self.control_frame, "span",      self.var_span,      row, 10, 900); row += 1
         self._make_slider(self.control_frame, "thickness", self.var_thickness, row, 1, 100);  row += 1
-
-        self.asym_label = ttk.Label(self.control_frame, text="asymptote slope a/b = -")
-        self.asym_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6)); row += 1
 
         self.btn_add = ttk.Button(self.control_frame, text="Add as New Annotation",    command=self.add_object)
         self.btn_add.grid(row=row, column=0, columnspan=2, sticky="ew", padx=6, pady=6); row += 1
@@ -205,8 +209,9 @@ class HyperbolaAnnotator:
         hint = (
             "Instructions:\n"
             "1. Click left image to set vertex x/y\n"
-            "2. a = vertical semi-axis, b = horizontal\n"
-            "   semi-axis; asymptote slope = a/b\n"
+            "2. slope = the only shape knob; a/b are\n"
+            "   auto-derived from vertex depth (a=y_v,\n"
+            "   b=y_v/slope), matching the GPR physics\n"
             "3. span = horizontal draw extent\n"
             "4. Add / Update / Delete annotations\n"
             "5. 切换视图 toggles hyperbola ↔ rectangle\n"
@@ -220,11 +225,10 @@ class HyperbolaAnnotator:
 
         for v in [self.var_x, self.var_y, self.var_span, self.var_thickness]:
             v.trace_add("write", lambda *_: self.refresh_preview())
-        # Quantize a / b to 2 decimals as the slider moves, then refresh.
-        self.var_a.trace_add("write", lambda *_: self._on_ab_change(self.var_a))
-        self.var_b.trace_add("write", lambda *_: self._on_ab_change(self.var_b))
+        # Quantize slope to 2 decimals as the slider moves, then refresh.
+        self.var_slope.trace_add("write", lambda *_: self._quantize_var(self.var_slope))
 
-    def _on_ab_change(self, var):
+    def _quantize_var(self, var):
         if getattr(self, "_quantizing", False):
             return
         self._quantizing = True
@@ -374,8 +378,7 @@ class HyperbolaAnnotator:
         else:
             self.var_x.set(w / 2)
             self.var_y.set(h / 3)
-            self.var_a.set(max(40, h / 8))
-            self.var_b.set(max(40, w / 8))
+            self.var_slope.set(1.0)
             self.var_span.set(max(80, w / 3))
             self.var_thickness.set(12)
 
@@ -425,11 +428,6 @@ class HyperbolaAnnotator:
     def refresh_preview(self, *_):
         if self.original_image is None:
             return
-        # Live asymptote-slope readout.
-        b = self.var_b.get()
-        slope = self.var_a.get() / b if b > 1e-6 else float("inf")
-        self.asym_label.config(text=f"asymptote slope a/b = {slope:.3f}")
-
         preview_img = self.original_image.copy()
         draw = ImageDraw.Draw(preview_img, "RGBA")
 
@@ -461,8 +459,7 @@ class HyperbolaAnnotator:
         obj       = normalize_obj(obj)
         x_vertex  = obj["x_vertex"]
         y_vertex  = obj["y_vertex"]
-        a         = max(0.0, obj["a"])
-        b         = max(1e-6, obj["b"])
+        a, b      = hyperbola_ab(y_vertex, obj["slope"])
         span      = max(2.0, obj["span"])
         thickness = max(1.0, obj["thickness"])
         half_w    = span / 2.0
@@ -521,8 +518,7 @@ class HyperbolaAnnotator:
             "label":     self.var_name.get().strip() or "hyperbola",
             "x_vertex":  round(float(self.var_x.get()), 2),
             "y_vertex":  round(float(self.var_y.get()), 2),
-            "a":         round(float(self.var_a.get()), 2),
-            "b":         round(float(self.var_b.get()), 2),
+            "slope":     round(float(self.var_slope.get()), 2),
             "span":      round(float(self.var_span.get()), 2),
             "thickness": round(float(self.var_thickness.get()), 2),
         }
@@ -561,7 +557,7 @@ class HyperbolaAnnotator:
                 tk.END,
                 f"[{i}] {obj.get('label','hyperbola')} | "
                 f"x={obj['x_vertex']:.1f}, y={obj['y_vertex']:.1f}, "
-                f"a={obj['a']:.1f}, b={obj['b']:.1f}, "
+                f"slope={obj['slope']:.2f}, "
                 f"span={obj['span']:.1f}, t={obj['thickness']:.1f}"
             )
         if (self.selected_object_index is not None and
@@ -584,8 +580,7 @@ class HyperbolaAnnotator:
         self.var_name.set(obj.get("label", "hyperbola"))
         self.var_x.set(obj["x_vertex"])
         self.var_y.set(obj["y_vertex"])
-        self.var_a.set(obj["a"])
-        self.var_b.set(obj["b"])
+        self.var_slope.set(obj["slope"])
         self.var_span.set(obj["span"])
         self.var_thickness.set(obj["thickness"])
 

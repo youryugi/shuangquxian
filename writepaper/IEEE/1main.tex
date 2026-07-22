@@ -42,11 +42,11 @@
 \maketitle
 
 \begin{abstract}
-This document describes the most common article elements and how to use the IEEEtran class with \LaTeX \ to produce files that are suitable for submission to the IEEE.  IEEEtran can produce conference, journal, and technical note (correspondence) papers with a suitable choice of class options. 
+In ground penetrating radar (GPR) B-scan images, subsurface targets such as pipelines and cables appear as hyperbolic reflections, and their accurate detection is a prerequisite for target localization and parameter inversion. Existing deep learning detectors typically adopt axis-aligned bounding boxes as both the annotation and output format, overlooking the strip-like, symmetric, and parametric geometry of hyperbolic echoes, while commonly used attention mechanisms rely on self-learned channel or spatial reweighting and lack explicit guidance on where to attend. To address these issues, this letter proposes a hyperbola-band attention supervision method. A dedicated annotation tool records each target as a parametric band with a few parameters, including the vertex, slope, span, and thickness, which is then rasterized into a band mask. An attention branch in the network learns to focus on hyperbola regions under the explicit supervision of this mask, and the resulting spatial prior is injected into the detection features, with the whole network trained end to end. Experiments on a public GPR dataset show that the proposed method consistently outperforms the baseline across training-data ratios, raising the F1-score from 0.68 to 0.84 at best with markedly improved training stability, and surpasses representative self-learned attention modules, demonstrating the effectiveness of explicit geometric supervision for hyperbola detection in GPR B-scans.
 \end{abstract}
 
 \begin{IEEEkeywords}
-Article submission, IEEE, IEEEtran, journal, \LaTeX, paper, template, typesetting.
+Ground penetrating radar (GPR), hyperbola detection, attention supervision, deep learning.
 \end{IEEEkeywords}
 
 \section{Introduction}
@@ -140,7 +140,7 @@ which validates the effectiveness of the proposed method.
 \subsection{Hyperbola recognition task}
 \begin{figure*}[]
 \centering
-\includegraphics[width=0.9\linewidth]{bscan.png}
+\includegraphics[width=0.9\linewidth, trim={0 40 0 20}, clip]{bscan.png}
 \caption{Formation of a GPR B-scan.}
 \label{fig:bscan}
 \end{figure*}
@@ -166,10 +166,30 @@ Attention mechanisms are increasingly embedded into task-specific GPR pipelines 
 More recent designs tailor attention specifically to hyperbolic geometry and apex-localization objectives that are closely aligned with our study. A rebar-recognition model emphasizes hyperbolic features with deformable attention and a hyperbolic attention transformer before proposal generation \cite{li2025rebar}, a lightweight dual-task keypoint detector couples attention-enhanced features with keypoint regression for precise vertex localization \cite{hou2025endtoend}, and a state-space detector for arbitrarily long B-scans targets hyperbola vertex estimation directly \cite{lan2024statespace}. The clear trend is a shift from generic channel or spatial reweighting toward physically informed designs that encode hyperbolic structure and apex localization, while traditional fitting-based pipelines remain relevant for their geometric interpretability \cite{lei2019autohyperbola}. This motivates our approach: instead of localizing the echo through rectangular proxies or post-hoc curve fitting, we represent the hyperbola by its strip-like, symmetric, parametric shape, so that both annotation and learning are aligned with the geometry of the target.
 
 
-\subsection{Labelling tools}
-Supervised detectors depend on large sets of manually annotated images, and a range of general-purpose annotation tools has been developed to meet this need. Early web-based systems such as LabelMe established collaborative image labelling at scale \cite{russell2008labelme}, and the annotation pipeline behind large benchmarks like MS-COCO further standardized bounding-box, polygon, and segmentation-mask labelling \cite{lin2014coco}. Building on these efforts, widely used open-source tools including LabelImg \cite{tzutalin2015labelimg}, Labelme \cite{wada2016labelme}, the VGG Image Annotator \cite{dutta2019via}, and CVAT \cite{cvat} provide interactive interfaces for the common geometric primitives---axis-aligned rectangles, polygons, key points, and pixel-wise masks. These primitives are generic and domain-agnostic, which is exactly what makes the tools broadly applicable across natural-image tasks.
+\subsection{Annotation of hyperbolic reflections}
+Training a detection model requires large quantities of manually annotated images,
+and a variety of general-purpose annotation tools have been developed to meet this need.
+Early systems such as LabelMe enabled collaborative image labelling at scale \cite{russell2008labelme},
+and the annotation pipelines behind large-scale benchmarks such as Microsoft common objects in context (MS-COCO)
+further standardized this process \cite{lin2014coco}.
+Building on these efforts, widely used open-source tools such as LabelImg \cite{tzutalin2015labelimg}
+and the computer vision annotation tool (CVAT) \cite{cvat} offer interactive interfaces for a common set of
+geometric shapes: axis-aligned rectangles, polygons, key points, and pixel-wise masks.
+Being generic and domain-agnostic, these shapes are precisely 
+what makes such tools broadly applicable across natural-image tasks.
 
-In GPR interpretation, hyperbolic reflections are usually annotated with these same general-purpose tools; bounding boxes drawn in software such as LabelImg are the de facto standard for labelling subsurface targets in B-scans \cite{CBAM}. A rectangle, however, records only the extent of the echo rather than its strip-like, symmetric, and parametric geometry, so the resulting labels are misaligned with the physical shape of the hyperbola and cannot directly provide geometric supervision such as vertex position, curvature, or band thickness. Polygon and mask tools can trace the curve more tightly, but they require dense per-instance clicking and still do not expose the underlying hyperbola parameters. This gap between the geometry-agnostic primitives offered by existing tools and the parametric, band-shaped nature of hyperbolic targets motivates the dedicated annotation tool proposed in this work, which lets annotators place and adjust a parametric hyperbola band through a few interpretable controls and export both the shape parameters and the derived bounding box.
+In GPR interpretation, hyperbolic reflections are typically annotated with these same general-purpose shapes.
+Bounding boxes remain the most common choice for subsurface targets in B-scans~\cite{besaw2015deep},
+whereas a growing body of work instead marks the apex of each hyperbola as a keypoint and treats it as
+the localization target~\cite{hou2025endtoend,lan2024statespace}; segmentation masks have also been used to
+delineate the hyperbola or its apex region more tightly~\cite{hou2021msrcnn}.
+Each of these schemes, however, captures only part of the geometry: a bounding box records merely the extent
+of the echo, a single keypoint pins down only the apex while discarding the opening and curvature of the curve,
+and segmentation masks demand dense per-instance labelling yet still do not expose the underlying hyperbola parameters.
+None of them aligns with the parametric, band-shaped nature of the hyperbola or offers direct geometric supervision.
+This mismatch motivates the dedicated annotation tool proposed in this work, which allows annotators to place and
+adjust a parametric hyperbola band through a few interpretable controls, and to export both the shape parameters
+and the derived bounding box.
 
 
 \section{Proposed method}
@@ -252,14 +272,14 @@ Fig.~\ref{fig:dataset_samples} shows an example, presenting the raw image, the a
 The network takes a single-channel grayscale B-scan image as input and outputs a rectangular bounding box for each hyperbolic signature in the image.
 Unlike existing methods, we introduce within the backbone an attention branch that is explicitly supervised by a hyperbola-band mask, 
 and inject it into the bottleneck features via channel-wise concatenation, thereby guiding the network to focus on the hyperbolas and improving detection performance.
-A schematic of the network is shown in Fig.~\ref{fig:11}.
+A schematic of the network is shown in Fig.~\ref{fig:framework}.
 
-\begin{figure}
+\begin{figure*}
 \centering
-\includegraphics[width=1\linewidth]{11.png}
-\caption{11}
-\label{fig:11}
-\end{figure}
+\includegraphics[width=1\linewidth]{framework.png}
+\caption{Overview of the proposed network.}
+\label{fig:framework}
+\end{figure*}
 
 The backbone consists of three down-sampling stages followed by a bottleneck layer; 
 each stage comprises two $3\times3$ convolutions, 
@@ -298,7 +318,7 @@ The two terms are complementary: the former enforces pixel-level accuracy,
 while the latter enforces region-level shape consistency 
 and helps mitigate the class imbalance caused by the band occupying only a small fraction of the image.
 
-\paragraph{Attention-guided feature fusion.}
+\paragraph{Attention-guided feature fusion}
 The attention map $A$ is passed through a sigmoid and downsampled by a factor of two via average pooling 
 to align with the bottleneck resolution, yielding $\tilde{A}$. 
 It is then concatenated with $F_b$ along the channel dimension 
@@ -306,7 +326,7 @@ and compressed back to 256 channels by a $1\times1$ convolution with batch norma
 producing the fused feature $\hat{F}$. 
 This operation injects the spatial prior of the hyperbola band into the feature representation passed to the detection head.
 
-\paragraph{Detection head and decoding.}
+\paragraph{Detection head and prediction}
 The detection head follows a YOLO-style dense prediction paradigm, 
 producing three parallel outputs over an $80\times80$ grid at stride 8: 
 objectness (1 channel), box size (2 channels), and sub-pixel center offset (2 channels). 
@@ -332,18 +352,45 @@ The detection loss is the sum of the three terms,
 \end{equation}
 and the overall training objective combines it with the attention supervision loss introduced above,
 \begin{equation}
-\mathcal{L} = \mathcal{L}_{\mathrm{det}} + \lambda_{\mathrm{att}}\, \mathcal{L}_{\mathrm{att}},
+\mathcal{L} = \mathcal{L}_{\mathrm{det}} + \lambda\, \mathcal{L}_{\mathrm{att}},
 \end{equation}
-where $\lambda_{\mathrm{att}}$ controls the relative weight of the attention supervision. All terms are optimized jointly in a single end-to-end training pass.
+where $\lambda$ controls the relative weight of the attention supervision. All terms are optimized jointly in a single end-to-end training pass.
 
 
 \section{Result and evaluation}
-\subsection{Dataset}
-%
-The experiments are conducted on a publicly available GPR dataset for intelligent recognition of subsurface utilities~\cite{dataset}.
-The dataset consists of labeled GPR B-scan images collected from real urban and industrial environments using ground-coupled antennas operating at 200~MHz and 400~MHz.
+\subsection{Implementation Details}
+%本文的数据集是universe.roboflow上的数据集。一共有318张图片，所有的实验都在十个随机种子下进行，按比例划分训练数据集 剩下的比例是训练数据集。
+%测试结果是10次结果的平均并附上了std。
+The dataset used in this study is a publicly available GPR dataset obtained from Roboflow Universe, 
+comprising 318 B-scan images in total.
+For each experiment, the images are randomly split into a training set according to a specified ratio, 
+with the remaining images used as the test set. All experiments are conducted under ten random seeds, 
+and the reported results are averaged over the ten runs,
+with the corresponding standard deviations provided.
+For evaluation, a predicted box is counted as a true positive if its intersection-over-union (IoU)
+with a ground-truth box is at least 0.5, and each ground-truth box can be matched at most once;
+precision, recall, and F1-score are then computed accordingly.
 
+All experiments are implemented in PyTorch and run on a single NVIDIA GeForce RTX 5060 Ti GPU (8 GB)
+with an AMD Ryzen 7 9800X3D CPU.
+The main training settings are summarized in Table~\ref{tab:impl}.
 
+\begin{table}[]
+\caption{Training Settings}
+\label{tab:impl}
+\centering
+\begin{tabular}{ll}
+\toprule
+Item & Setting \\
+\midrule
+Optimizer & Adam \\
+Learning rate & $5\times10^{-4}$ \\
+Batch size & 8 \\
+Training epochs & 100 \\
+Mixed precision & bfloat16 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Detection performance}
 % 表展示了不同训练数据比例下的检测性能。可以看出，在所有训练数据比例下，本文方法均优于基线方法。
@@ -356,11 +403,22 @@ The dataset consists of labeled GPR B-scan images collected from real urban and 
 % 这可能时因为测试数据集样本量较少，导致评估结果不稳定。
 
 % 以上结果的是在lambda=0.7的情况下得到的。我们还进行了lambda参数敏感性分析在后文中说明。
-Table~\ref{tab:bbox_results} reports the detection performance under different training-data ratios. As can be observed, the proposed method consistently outperforms the baseline across all training-data ratios. The improvement in F1-score is most pronounced at a training-data ratio of 0.7, where our method achieves 0.84 compared with 0.68 for the baseline. The training stability is also notably enhanced, with the standard deviation decreasing from 0.21 to 0.03. This gain is primarily attributed to the improvement in recall, as the attention constraint guides the network to focus on the hyperbola-band regions and thereby reduces missed detections, which demonstrates the effectiveness of the proposed method.
+Table~\ref{tab:bbox_results} reports the detection performance under different training-data ratios. 
+As can be observed, the proposed method consistently outperforms the baseline across all training-data ratios. 
+The improvement in F1-score is most pronounced at a training-data ratio of 0.7, 
+where our method achieves 0.84 compared with 0.68 for the baseline. 
+The training stability is also notably enhanced, with the standard deviation decreasing from 0.21 to 0.03. 
+This gain is primarily attributed to the improvement in recall, 
+as the attention constraint guides the network to focus on the hyperbola-band regions and thereby reduces missed detections, 
+which demonstrates the effectiveness of the proposed method.
 
-Nevertheless, at a training-data ratio of 0.9, no significant improvement is observed and the stability is relatively poor. This is presumably due to the limited number of samples in the test set, which leads to unstable evaluation results. 
+Nevertheless, at a training-data ratio of 0.9, 
+no significant improvement is observed and the stability is relatively poor. 
+This is presumably due to the limited number of samples in the test set, 
+which leads to unstable evaluation results. 
 
-It should be noted that the above results are obtained with $\lambda_{\mathrm{att}}=0.7$; a sensitivity analysis of the parameter $\lambda$ is further presented in the following section.
+It should be noted that the above results are obtained with $\lambda=0.7$; 
+a sensitivity analysis of the parameter $\lambda$ is further presented in Section~\ref{lambda}.
 
 \begin{table*}[]
 \centering
@@ -393,11 +451,60 @@ $\lambda_{\mathrm{att}}=0.7$. The best F1 per row is shown in \textbf{bold}.}
 \end{tabular}
 \end{table*}
 
+\subsection{Visualization of attention maps}
+%0-88可能可以0630的结果
+%第一行  标注 矩形标注  无注意力的结果   无注意力的注意力
+%第二行   双曲线带 标注  有注意力的结果   有注意力的注意力
+%可能第一列的标注不需要？
+To visualize where the network attends, we adopt gradient-weighted class activation mapping (Grad-CAM)~\cite{selvaraju2017gradcam},
+a widely used method for interpreting the predictions of convolutional networks.
+Intuitively, it produces a heatmap over the input image in which brighter regions are the ones that
+contribute most to the network's decision, 
+so we can directly see which parts of the image the model relies on when making a detection. 
+Fig.~\ref{fig:attn_vis} shows a representative sample, 
+where we use Grad-CAM to visualize the regions that the network relies on. 
+The top row corresponds to the baseline without attention supervision, 
+and the bottom row to our method; 
+the left column shows the detection results and the right column the corresponding Grad-CAM maps. 
+For the baseline, the attention is mostly scattered over the background, 
+so the model fails to focus on the hyperbola band and does not detect it. 
+In contrast, with the explicit supervision on the hyperbola band, 
+our method attends not only to a few background curves but also to the hyperbola band itself, 
+clearly capturing the overall hyperbolic structure and thus producing a correct detection. 
+This comparison demonstrates the effectiveness of the proposed attention supervision.
+\begin{figure}[]
+    \centering
+  \subfloat[Baseline detection.]{\includegraphics[width=0.48\linewidth]{baseline-result.png}}
+  \hfill
+  \subfloat[Baseline attention.]{\includegraphics[width=0.48\linewidth]{baseline-attention.png}}
+  \\
+  \subfloat[Our detection.]{\includegraphics[width=0.48\linewidth]{our-result.png}}
+  \hfill
+  \subfloat[Our attention.]{\includegraphics[width=0.48\linewidth]{ours-attention.png}}
+  \caption{Visualization of attention maps.}
+  \label{fig:attn_vis}
+\end{figure}
+
 %加上可视化的比较 他漏掉了什么 我们对了什么
 \subsection{Comparison of Detection Performance with Different Attention Modules}
 %和其他注意力机制比较  ok
 %表~\ref{tab:attention_comparison} 将本文方法与若干已在探地雷达、SAR 及遥感识别中得到应用的代表性注意力模块进行了对比:Pan et al. 采用通道注意力 SE,N. Wang et al. 采用通道—空间注意力 CBAM,Z. Wang et al. 采用非局部注意力 Non-local,Shen et al. 采用坐标注意力 CA。为公平比较,我们将上述注意力模块在相同骨干网络的同一位置进行复现,并在本文双曲线数据集上以完全一致的训练与评估设置进行实验,表中所有结果均由本文复现得到。本文方法在精确率、召回率和 F1 上均取得最优,F1 达到 0.89,较次优方法提升约 9%。现有模块普遍难以兼顾精确率与召回率,而本文方法同时获得最高的精确率与召回率,且 F1 标准差最低,兼具更高的检测精度与稳定性。究其原因,SE、CBAM、Non-local 与 CA 均属于自学习的注意力机制,仅依据特征自身对通道或空间进行重加权,缺乏关于"应关注何处"的显式指导;而本文方法通过双曲线条带掩膜对注意力分支施加显式监督,直接引导网络聚焦于双曲线目标区域,从而优于这些通用注意力模块。
-As shown in Table~\ref{tab:attention_comparison}, we compare the proposed method with several representative attention modules that have been applied to ground-penetrating radar, SAR, and remote-sensing recognition: Pan et al. adopt the channel attention SE, N. Wang et al. adopt the channel–spatial attention CBAM, Z. Wang et al. adopt the non-local attention Non-local, and Shen et al. adopt the coordinate attention CA. For a fair comparison, we re-implement these attention modules at the same position within an identical backbone and evaluate them on our hyperbola dataset under exactly the same training and evaluation settings, so that all results reported in the table are obtained by our own re-implementation. The proposed method achieves the best precision, recall, and F1, reaching an F1 of 0.89 with an improvement of about 9\% over the second-best method. Whereas the existing modules generally struggle to balance precision and recall, our method attains the highest precision and recall simultaneously, together with the lowest F1 standard deviation, thus offering both higher detection accuracy and greater stability. This can be attributed to the fact that SE, CBAM, Non-local, and CA are all self-learned attention mechanisms that merely re-weight channel or spatial features according to the features themselves, without explicit guidance on where to attend; in contrast, our method imposes explicit supervision on the attention branch through the hyperbola-band mask, directly guiding the network to focus on the hyperbolic target regions and thereby outperforming these generic attention modules.
+To verify whether the proposed explicit geometric supervision is more effective than
+generic attention modules for hyperbola detection, we compare it with four representative
+attention modules~\cite{SE,CBAM,Non-local,CA} that have been applied to ground-penetrating radar,
+SAR, and remote-sensing recognition. The comparison results are summarized in Table~\ref{tab:attention_comparison}.
+For a fair comparison, we re-implement these attention modules at the same position within an identical backbone 
+and evaluate them on our hyperbola dataset under exactly the same training and evaluation settings, 
+so that all results reported in the table are obtained by our own re-implementation. 
+The proposed method achieves the best precision, recall, and F1, 
+reaching an F1 of 0.89 with an improvement of about 9\% over the second-best method. 
+Our method attains the highest precision and recall simultaneously,
+together with the lowest F1 standard deviation, thus offering both higher detection accuracy and greater stability. 
+This can be attributed to the fact that these attention modules merely re-weight channel or spatial features
+according to the features themselves, without explicit guidance on where to attend; in contrast,
+our method imposes explicit supervision on the attention branch through the hyperbola-band mask, 
+directly guiding the network to focus on the hyperbolic target regions and 
+thereby outperforming these generic attention modules.
 \begin{table}[]
 \caption{Comparison of Detection Performance with Different Attention Modules}
 \label{tab:attention_comparison}
@@ -425,18 +532,34 @@ Shen et al.~\cite{CA}    & $0.80 \pm 0.23$ & $0.84 \pm 0.09$ & $0.80 \pm 0.17$ \
 
 
 \subsection{Sensitivity analysis of the parameter $\lambda$}
+\label{lambda}
 %参数敏感性分析 lam 从0.1开始嘛 ok
 % 图~\ref{fig:lambda} 给出了注意力约束权重 $\lambda$ 从 0.1 到 10 变化时检测 F1 的分布,其中每个取值均在 10 个随机种子上统计,$\lambda=0$ 对应基线。可以看出,在整个取值范围内,引入注意力约束后的 F1 中位数均稳定在 0.78 至 0.84 之间,显著高于基线的 0.68,表明本文方法对 $\lambda$ 的选取并不敏感,在较宽的参数区间内均能带来稳定的性能提升。其中 $\lambda=0.7$ 取得最高的中位 F1 0.84,且分布最为集中,标准差仅为 0.03;当 $\lambda$ 过小时约束偏弱,增益有限;当 $\lambda$ 过大时则略微挤压主检测任务,使 F1 回落至约 0.79,说明存在一个位于中间的最优区间。综合性能与稳定性,本文最终将 $\lambda=0.7$ 作为默认设置。
-Fig.~\ref{fig:lambda} illustrates the distribution of the detection F1 as the attention-constraint weight $\lambda$ varies from 0.1 to 10, where each value is evaluated over 10 random seeds and $\lambda=0$ corresponds to the baseline. Across the entire range of $\lambda$, the median F1 obtained with the attention constraint consistently remains between 0.78 and 0.84, substantially higher than the baseline value of 0.68. This indicates that the proposed method is insensitive to the choice of $\lambda$ and yields stable performance gains over a wide range of this parameter. The best result is achieved at $\lambda=0.7$, which attains the highest median F1 of 0.84 together with the most concentrated distribution, with a standard deviation of only 0.03. When $\lambda$ is too small, the constraint becomes too weak to provide sufficient guidance, whereas an excessively large $\lambda$ slightly suppresses the primary detection task and lowers the F1 to around 0.79. These results suggest the existence of an intermediate optimal range, and $\lambda=0.7$ is therefore adopted as the default setting throughout our experiments in consideration of both accuracy and stability.
+To investigate the sensitivity of the proposed method to the attention-constraint weight $\lambda$,
+we vary $\lambda$ from 0.1 to 10 and evaluate the detection F1 over 10 random seeds for each value,
+where $\lambda=0$ corresponds to the baseline.
+The resulting distribution of the F1 is shown in Fig.~\ref{fig:lambda}.
+Across the entire range of $\lambda$, the median F1 obtained with the attention constraint consistently remains
+between 0.78 and 0.84, substantially higher than the baseline value of 0.68. 
+This indicates that the proposed method is insensitive to the choice of $\lambda$ 
+and yields stable performance gains over a wide range of this parameter. 
+The best result is achieved at $\lambda=0.7$, which attains the highest median F1 of 0.84 
+together with the most concentrated distribution, 
+with a standard deviation of only 0.03. When $\lambda$ is too small, 
+the constraint becomes too weak to provide sufficient guidance, 
+whereas an excessively large $\lambda$ slightly suppresses the primary detection task and lowers the F1 to around 0.79. 
+These results suggest the existence of an intermediate optimal range, 
+and $\lambda=0.7$ is therefore adopted as the default setting throughout our experiments 
+in consideration of both accuracy and stability.
 \begin{figure}
 \centering
 \includegraphics[width=1\linewidth]{boxplot_f1_none_vs_abs_lam.pdf}
-\caption{lambda}
+\caption{Sensitivity of the detection F1 to the attention-constraint weight $\lambda$.}
 \label{fig:lambda}
 \end{figure}
 
 
-\subsection{Result3}
+%\subsection{Result3}
 %软性的约束是不是可能会更加好 如果lam参数调节好的话
 \section{Discussion}
 %讨论为什么不直接预测双曲线--面前主流的任务还是用bbox
@@ -451,15 +574,13 @@ Fig.~\ref{fig:lambda} illustrates the distribution of the detection F1 as the at
 
 % 第二,直接回归诸如曲率之类的双曲线参数对标注噪声、杂波、旁瓣以及相互重叠的回波都很敏感,
 % 而且各参数尺度不一使得损失难以平衡。
-Although our annotation tool already provides a complete parametric description
-of every hyperbola, we do not, at present, train the network to regress these
-parameters directly. 
-There are two reasons for this. 
+Although our annotation tool provides a complete parametric description of each hyperbola,
+in this work we do not train the network to regress these parameters directly, for two main reasons.
 First, the mainstream detection task, together with its datasets and evaluation protocols (IoU-based
 precision, recall, and F1), is built around bounding boxes; retaining a
 bounding-box output therefore allows a fair comparison with mainstream detectors
 and generic attention modules under a fully identical protocol. 
-Second, directly regressing hyperbola parameters such as curvature is sensitive to annotation
+Second, directly regressing hyperbola parameters such as slope is sensitive to annotation
 noise, clutter, side lobes, and mutually overlapping echoes, while the disparate
 scales of the individual parameters make the training loss difficult to balance.
 
@@ -478,28 +599,27 @@ discussed above, it remains the most informative output for practical use, and
 overcoming this difficulty is a natural direction for future work: moving from
 bounding-box localization toward predicting the parametric hyperbola itself and
 exporting its parameters for inversion. In GPR interpretation, inversion aims to
-recover the physical
-properties of a buried target from its hyperbolic signature: the apex position
+recover the physical properties of a buried target from its hyperbolic signature: the apex position
 and the opening of the curve are governed by the target depth and the
 propagation velocity in the host medium, so that accurate parameters translate
 into estimates of burial depth, object radius, and the dielectric permittivity of
 the surrounding soil, which are the quantities of practical interest for utility
-mapping and condition assessment~\cite{liu2022pipeline}. Several recent studies
-already regress such geometric quantities rather than boxes: GPR-Former directly
-predicts hyperbola parameters and refines them with a symmetry
-constraint~\cite{jin2024gprformer}, GPR-TransUNet regresses the curve within a
-transformer-augmented framework~\cite{ge2024gprtransunet}, and vertex-oriented
-detectors localize the apex directly through keypoint or state-space
-formulations~\cite{hou2025endtoend,lan2024statespace}. Our annotation, however,
-describes each target as a full hyperbolic band with vertex, width, curvature,
-and thickness, and a generic detection head that only regresses box size and
-center offset is not expressive enough to recover this richer parameterization.
-We therefore plan to design a dedicated prediction head and, more broadly, to
-fuse complementary deep-learning components, including dense detection for robust
-localization, band-mask segmentation for shape supervision, and transformer-style
-regression for the parameters, into a single model that outputs the complete
-parametric hyperbola end to end and thereby directly supports downstream
-inversion.
+mapping and condition assessment~\cite{liu2022pipeline}.
+Several recent studies already predict such hyperbola parameters directly instead of
+boxes, for example through transformer-based regression~\cite{jin2024gprformer,ge2024gprtransunet}
+or vertex-oriented keypoint and state-space formulations~\cite{hou2025endtoend,lan2024statespace}.
+The quantities we would ultimately estimate, namely the apex position and the opening of the
+curve, are essentially the same as those targeted by these works, so we do not claim a
+new set of parameters to predict.
+What differs is our starting point: we already have a complete parametric annotation of
+each hyperbola band, so moving on to predict these parameters is a natural next step for us.
+In addition, our attention branch is already supervised by the hyperbola-band mask to produce
+a band-shaped response that closely follows the target geometry, which offers a natural bridge
+toward such parametric prediction.
+A promising direction is therefore to attach a lightweight regression head on top of this
+response to decode the vertex, slope, span, and thickness of each hyperbola, rather than
+building a separate parameter regressor from scratch, so that the model outputs the complete
+parametric hyperbola end to end and directly supports downstream inversion.
 
 %未来的工作是对双曲线进行预测,并输出各种参数用于反演:本文最直接的延伸是从边界框定位转向预测双曲线本身。由于注意力分支已经被监督为产生贴合双曲线几何的条带状响应,一个自然的下一步是在其上附加一个轻量的回归头,把该响应解码为每条双曲线的参数化描述——顶点位置、张开宽度、曲率与带状厚度,而不是轴对齐的矩形框。这样的参数化输出可以直接馈入下游的地球物理反演,从而无需单独的后处理曲线拟合阶段即可估计目标的埋深、半径以及埋藏介质属性。
 % The most direct extension of this work is to move beyond bounding-box
