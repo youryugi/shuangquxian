@@ -146,7 +146,7 @@ def render_image(
 
 
 # ── 参数配置 ──────────────────────────────────────────────
-INPUT_DIR    = Path(__file__).parent   # 输入文件夹（递归搜索 .sgy，目前只处理 01 文件夹）
+INPUT_DIR    = Path(__file__).parent / "01"    # 输入文件夹（递归搜索 .sgy，目前只处理 01 文件夹）
 OUTPUT_DIR   = r"./vis"      # 输出文件夹（平铺，不建子目录）
 TIME_RANGE_NS_FALLBACK = 50.0  # 文件头缺少有效 dt 时的兜底时间范围（纳秒）
 MIN_VALID_SAMPLES   = 100    # 每道采样点数低于此值视为文件头损坏，直接跳过（正常应为 512）
