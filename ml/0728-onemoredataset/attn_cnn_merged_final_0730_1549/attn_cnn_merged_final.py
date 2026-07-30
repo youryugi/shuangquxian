@@ -34,7 +34,7 @@ RECT_JSON = os.path.join(IMG_DIR, "annotations_rect.json")
 MODES        = ["none", "abs", "soft"]  
 MODES        = ["none", "abs"]  #  abs(绝对)
 SEEDS        = [10, 11, 12, 13, 14,15,16,17,18,19]           # 随机种子，如 [1, 2, 3, 4]
-TRAIN_FRACS  = [0.7]                      # 训练集占比扫描列表，如 [0.3,0.5,0.7]：逐个对比不同训练数据量；命令行 --train_fracs 可覆盖
+TRAIN_FRACS  = [0.7,0.80]                      # 训练集占比扫描列表，如 [0.3,0.5,0.7]：逐个对比不同训练数据量；命令行 --train_fracs 可覆盖
 AUGMENT      = False                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
 RUN_VAL      = False                      # 是否每个 epoch 跑一遍 val（仅打印监控）。还没做自动选参，默认关，省时
@@ -45,11 +45,11 @@ ATTN_STRIDE  = 4                    # 注意力图下采样步长
 HM_SIGMA     = 6                  # heatmap 高斯半径
 batch_size   = 8
 NUM_WORKERS  = 8   # DataLoader 数据加载进程数：自动按 CPU 核数（封顶 8）；设 0 关闭多进程加载
-num_epochs   = 80
-LR           = 0.0005                 # Adam 学习率
+num_epochs   = 125
+LR           = 0.001                 # Adam 学习率
 nms_kernel   = 3
 max_det      = 5
-HM_THRESH    = 0.375                # 解码峰值阈值
+HM_THRESH    = 0.3                # 解码峰值阈值
 BBOX_IOU_THR = 0.5                 # 评测匹配 IoU 阈值
 BASE_CH      = 32                   # 网络通道基数
 
@@ -429,14 +429,13 @@ def train_model(attn_mode, full, tr, va, n_ep, work, tag, seed, augment=False, f
 # 6. 推理 / 评估
 # ══════════════════════════════════════════════════════════════════════════════
 @torch.no_grad()
-def predict(model, img_tensor, hm_thresh=None):
-    hm_thresh = HM_THRESH if hm_thresh is None else hm_thresh
+def predict(model, img_tensor):
     input_h, input_w = input_size
     gh, gw = input_h // HM_STRIDE, input_w // HM_STRIDE
     hm_logit, wh_p, off_p, a_logit = model(img_tensor.to(device))
     hm = torch.sigmoid(hm_logit[0, 0]).float().cpu().numpy()
     hm_nms = _heatmap_nms(hm, nms_kernel)
-    ys, xs = np.where(hm_nms >= hm_thresh)
+    ys, xs = np.where(hm_nms >= HM_THRESH)
     boxes, scores = [], []
     if len(ys) > 0:
         sc = hm_nms[ys, xs]; order = np.argsort(sc)[::-1][:max_det]
@@ -452,12 +451,12 @@ def predict(model, img_tensor, hm_thresh=None):
 
 
 @torch.no_grad()
-def evaluate(model, dataset, test_idx, hm_thresh=None):
+def evaluate(model, dataset, test_idx):
     TP = FP = FN = 0
     ai = au = 0.0
     for i in test_idx:
         img, _, _, _, _, band, meta = dataset[i]
-        boxes, scores, A = predict(model, img.unsqueeze(0), hm_thresh=hm_thresh)
+        boxes, scores, A = predict(model, img.unsqueeze(0))
         gt = [hyperbola_to_bbox(o) for o in meta["objects"]]
         matched = [False] * len(gt)
         for b, _ in sorted(zip(boxes, scores), key=lambda z: -z[1]):
