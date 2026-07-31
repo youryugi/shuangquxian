@@ -34,7 +34,7 @@ RECT_JSON = os.path.join(IMG_DIR, "annotations_rect.json")
 MODES        = ["none", "abs", "soft"]  
 MODES        = ["none", "abs"]  #  abs(绝对)
 SEEDS        = [10, 11, 12, 13, 14,15,16,17,18,19]           # 随机种子，如 [1, 2, 3, 4]
-TRAIN_FRACS  = [0.5]                      # 训练集占比扫描列表，如 [0.3,0.5,0.7]：逐个对比不同训练数据量；命令行 --train_fracs 可覆盖
+TRAIN_FRACS  = [0.5,0.6]                      # 训练集占比扫描列表，如 [0.3,0.5,0.7]：逐个对比不同训练数据量；命令行 --train_fracs 可覆盖
 AUGMENT      = False                     # 训练集数据增强开关（仅水平翻转），先关着，需要确认数据集中是否已经有了翻转。
 FUSE         = "concat"                     # 注意力融合方式：gate(乘法门控,默认) / concat(拼接+1x1卷积)
 RUN_VAL      = False                      # 是否每个 epoch 跑一遍 val（仅打印监控）。还没做自动选参，默认关，省时
@@ -45,7 +45,7 @@ ATTN_STRIDE  = 4                    # 注意力图下采样步长
 HM_SIGMA     = 6                  # heatmap 高斯半径
 batch_size   = 8
 NUM_WORKERS  = 8   # DataLoader 数据加载进程数：自动按 CPU 核数（封顶 8）；设 0 关闭多进程加载
-num_epochs   = 120
+num_epochs   = 80
 LR           = 0.0005                 # Adam 学习率
 nms_kernel   = 3
 max_det      = 5
@@ -54,7 +54,7 @@ BBOX_IOU_THR = 0.5                 # 评测匹配 IoU 阈值
 BASE_CH      = 32                   # 网络通道基数
 
 # —— 注意力监督相关（调参核心）——
-LAM_ATT      = [1]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
+LAM_ATT      = [0.7]        # 注意力 loss 权重扫描列表（abs/soft 特有）：逐个训练对比；命令行 --lam_att 可覆盖
 LAM_ATT_CUR  = 1.0                  # 占位用。。。运行时当前权重（主循环按 LAM_ATT 逐个设置；compute_loss 实际用它）
 MARGIN       = 0.5                  # soft 模式：要求 带内均值 − 带外均值 ≥ margin
 
