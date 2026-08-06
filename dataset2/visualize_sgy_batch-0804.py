@@ -147,7 +147,7 @@ def render_image(
 
 # ── 参数配置 ──────────────────────────────────────────────
 INPUT_DIR    = Path(__file__).parent / "dataset"    # 输入文件夹（递归搜索 .sgy）
-OUTPUT_DIR   = Path(__file__).parent / "label"       # 输出文件夹（镜像 INPUT_DIR 的目录结构）
+OUTPUT_DIR   = Path(__file__).parent / "vis-all"       # 输出文件夹（镜像 INPUT_DIR 的目录结构）
 TIME_RANGE_NS_FALLBACK = 50.0  # 文件头缺少有效 dt 时的兜底时间范围（纳秒）
 MIN_VALID_SAMPLES   = 100    # 每道采样点数低于此值视为文件头损坏，直接跳过（正常应为 512）
 BACKGROUND_REMOVAL  = True   # 是否做背景去除（滑动窗口平均道相减，压制直达波/水平振铃，业内标准做法）
