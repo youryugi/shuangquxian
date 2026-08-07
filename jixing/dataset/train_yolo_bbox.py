@@ -233,7 +233,7 @@ def train(args):
     print(f"[val] mAP50={metrics.box.map50:.4f}  mAP50-95={metrics.box.map:.4f}")
     best = os.path.join(args.work_dir, "train", "weights", "best.pt")
     print(f"[train] best weights -> {best}")
-    return best
+    return best, metrics.box.map50, metrics.box.map
 
 
 def detect(args):
