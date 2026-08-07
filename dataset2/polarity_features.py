@@ -29,8 +29,8 @@ def invert_polarity(data):
 
 
 # ── 参数配置 ──────────────────────────────────────────────
-INPUT_DIR    = Path(__file__).parent / "01"          # 输入文件夹，和 visualize_sgy_batch.py 保持一致
-OUTPUT_DIR   = Path(__file__).parent / "vis_inverted"  # 输出文件夹（极性反转后的图，平铺）
+INPUT_DIR    = Path(__file__).parent / "dataset"       # 输入文件夹，递归遍历其下所有 .sgy
+OUTPUT_DIR   = Path(__file__).parent / "vis_inverted_all"  # 输出文件夹（极性反转后的图，平铺）
 # ─────────────────────────────────────────────────────────
 
 
