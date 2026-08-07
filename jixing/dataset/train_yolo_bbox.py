@@ -6,19 +6,44 @@ file (class_id xc yc w h, normalized 0..1) and a shared classes.txt.
 Run inside the `gpr` conda env (already has ultralytics + torch + CUDA):
 
     conda activate gpr
-    python train_yolo_bbox.py train  --data-dir jixing-zhengchang --epochs 100
-    python train_yolo_bbox.py detect --weights yolo_runs/train/weights/best.pt --source jixing-zhengchang
+    python train_yolo_bbox.py train  --data-dir jixing-merged --epochs 100
+    python train_yolo_bbox.py detect --weights yolo_runs/train/weights/best.pt --source jixing-merged
 """
 import os
+import sys
 import glob
 import random
 import shutil
 import argparse
+from pathlib import Path
 
 import yaml
 
 SUPPORTED_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 _HERE = os.path.dirname(os.path.abspath(__file__))
+
+# ── 参数配置（直接改这里；点击 Run 不带命令行参数时生效。命令行参数可覆盖同名值）──
+# --- train ---
+DATA_DIR     = os.path.join(_HERE, "jixing-merged")  # 图片 + 同名 .txt 标签 + classes.txt（build_merged_dataset.py 合并 vis+vis-all 产出，单类 hyperbola）
+WORK_DIR     = os.path.join(_HERE, "yolo_runs")           # 数据集拷贝 + 训练产出目录
+MODEL        = "yolov8n.pt"                                # ultralytics 基础模型/权重
+EPOCHS       = 100
+IMGSZ        = 640
+BATCH        = 16
+VAL_RATIO    = 0.2
+SEED         = 0
+
+POLARITY_DIR = os.path.join(_HERE, "polarity")             # 极性属性图（Hilbert 变换派生通道，<base>_polarity.png）
+POLARITY_AUG = False
+
+INVERT_DIR   = os.path.join(_HERE, "..", "..", "dataset2", "vis_inverted_all")  # 真极性反转渲染图（data -> -data）
+INVERT_AUG   = True
+
+# --- detect ---
+DETECT_WEIGHTS = os.path.join(WORK_DIR, "train", "weights", "best.pt")
+DETECT_SOURCE  = os.path.join(_HERE, "jixing-merged")
+DETECT_CONF    = 0.25
+# ─────────────────────────────────────────────────────────
 
 # name -> (default, help). Defaults are all 0 (every built-in augmentation
 # off) so the baseline run is clean; pass a flag to turn a specific one back
@@ -64,7 +89,25 @@ def collect_labeled_images(data_dir):
     return pairs
 
 
-def build_yolo_dataset(data_dir, work_dir, val_ratio=0.2, seed=0, polarity_dir=None, polarity_aug=False):
+def build_invert_lookup(invert_dir):
+    """dataset2/polarity_features.py flattens the raw dataset tree with
+    flat_output_name(): "_".join(relative_parts) + ".png", relative to the
+    *whole* dataset root. That leaves one extra leading "<top_folder>_"
+    segment versus the flat names used here (produced from a single
+    top-folder subtree), so exact-basename lookup fails. Stripping the
+    first "_"-segment off each inverted filename recovers a key that
+    matches this project's basenames directly.
+    """
+    lookup = {}
+    for path in Path(invert_dir).glob("*.png"):
+        _, _, rest = path.name.partition("_")
+        if rest:
+            lookup[rest] = str(path)
+    return lookup
+
+
+def build_yolo_dataset(data_dir, work_dir, val_ratio=0.2, seed=0, polarity_dir=None, polarity_aug=False,
+                        invert_dir=None, invert_aug=False):
     """Copy images/labels into images/{train,val} + labels/{train,val} and
     write data.yaml, the layout ultralytics expects.
 
@@ -74,6 +117,14 @@ def build_yolo_dataset(data_dir, work_dir, val_ratio=0.2, seed=0, polarity_dir=N
     polarity attribute map is the same size/geometry as the source image,
     so the annotations carry over unchanged). Val is left untouched so
     train/val never contain two representations of the same underlying scan.
+
+    If invert_aug is set, each *train*-split image gets its true
+    sign-inverted render (data -> -data, from dataset2/polarity_features.py,
+    looked up via build_invert_lookup) added as an extra training sample
+    with the same box labels — the hyperbola geometry is unchanged, only
+    the amplitude sign flips. This is a different augmentation from
+    polarity_aug: that one adds a derived attribute-map channel, this one
+    adds a genuinely re-rendered, sign-flipped radargram.
     """
     classes = read_classes(data_dir)
     pairs = collect_labeled_images(data_dir)
@@ -90,6 +141,9 @@ def build_yolo_dataset(data_dir, work_dir, val_ratio=0.2, seed=0, polarity_dir=N
 
     if polarity_aug and not polarity_dir:
         raise ValueError("--polarity-aug requires --polarity-dir")
+    if invert_aug and not invert_dir:
+        raise ValueError("--invert-aug requires --invert-dir")
+    invert_lookup = build_invert_lookup(invert_dir) if invert_aug else {}
 
     dataset_dir = os.path.join(work_dir, "yolo_dataset")
     for split, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
@@ -98,20 +152,34 @@ def build_yolo_dataset(data_dir, work_dir, val_ratio=0.2, seed=0, polarity_dir=N
         os.makedirs(img_dir, exist_ok=True)
         os.makedirs(lbl_dir, exist_ok=True)
         n_polarity_added = 0
+        n_invert_added = 0
         for img_path, label_path in split_pairs:
-            shutil.copy2(img_path, os.path.join(img_dir, os.path.basename(img_path)))
+            img_name = os.path.basename(img_path)
+            shutil.copy2(img_path, os.path.join(img_dir, img_name))
             shutil.copy2(label_path, os.path.join(lbl_dir, os.path.basename(label_path)))
 
             if split == "train" and polarity_aug:
-                base = os.path.splitext(os.path.basename(img_path))[0]
+                base = os.path.splitext(img_name)[0]
                 pol_img_path = os.path.join(polarity_dir, f"{base}_polarity.png")
                 if os.path.exists(pol_img_path):
                     pol_name = os.path.basename(pol_img_path)
                     shutil.copy2(pol_img_path, os.path.join(img_dir, pol_name))
                     shutil.copy2(label_path, os.path.join(lbl_dir, os.path.splitext(pol_name)[0] + ".txt"))
                     n_polarity_added += 1
+
+            if split == "train" and invert_aug:
+                inv_img_path = invert_lookup.get(img_name)
+                if inv_img_path:
+                    base, ext = os.path.splitext(img_name)
+                    inv_name = f"{base}_inverted{ext}"
+                    shutil.copy2(inv_img_path, os.path.join(img_dir, inv_name))
+                    shutil.copy2(label_path, os.path.join(lbl_dir, os.path.splitext(inv_name)[0] + ".txt"))
+                    n_invert_added += 1
         if split == "train" and polarity_aug:
             print(f"[dataset] +{n_polarity_added} polarity-attribute train images "
+                  f"(of {len(train_pairs)} base train images)")
+        if split == "train" and invert_aug:
+            print(f"[dataset] +{n_invert_added} true-polarity-inverted train images "
                   f"(of {len(train_pairs)} base train images)")
 
     yaml_path = os.path.join(dataset_dir, "data.yaml")
@@ -138,10 +206,13 @@ def train(args):
     args.work_dir = os.path.abspath(args.work_dir)
     if args.polarity_aug:
         args.polarity_dir = os.path.abspath(args.polarity_dir)
+    if args.invert_aug:
+        args.invert_dir = os.path.abspath(args.invert_dir)
 
     yaml_path = build_yolo_dataset(
         args.data_dir, args.work_dir, args.val_ratio, args.seed,
         polarity_dir=args.polarity_dir, polarity_aug=args.polarity_aug,
+        invert_dir=args.invert_dir, invert_aug=args.invert_aug,
     )
     model = YOLO(args.model)
     aug_kwargs = {name: getattr(args, name) for name in AUG_PARAMS}
@@ -192,37 +263,53 @@ def build_argparser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pt = sub.add_parser("train", help="Train a YOLO detector on the annotated boxes.")
-    pt.add_argument("--data-dir", default=os.path.join(_HERE, "jixing-zhengchang"),
+    pt.add_argument("--data-dir", default=DATA_DIR,
                      help="Folder with images + matching .txt labels + classes.txt (annotated by biaozhu-yolo-bbox.py).")
-    pt.add_argument("--work-dir", default=os.path.join(_HERE, "yolo_runs"),
+    pt.add_argument("--work-dir", default=WORK_DIR,
                      help="Output folder for the copied dataset + training runs.")
-    pt.add_argument("--model", default="yolov8n.pt", help="Ultralytics base model/checkpoint to start from.")
-    pt.add_argument("--epochs", type=int, default=100)
-    pt.add_argument("--imgsz", type=int, default=640)
-    pt.add_argument("--batch", type=int, default=16)
-    pt.add_argument("--val-ratio", type=float, default=0.2)
-    pt.add_argument("--seed", type=int, default=0)
-    pt.add_argument("--polarity-dir", default=os.path.join(_HERE, "polarity"),
+    pt.add_argument("--model", default=MODEL, help="Ultralytics base model/checkpoint to start from.")
+    pt.add_argument("--epochs", type=int, default=EPOCHS)
+    pt.add_argument("--imgsz", type=int, default=IMGSZ)
+    pt.add_argument("--batch", type=int, default=BATCH)
+    pt.add_argument("--val-ratio", type=float, default=VAL_RATIO)
+    pt.add_argument("--seed", type=int, default=SEED)
+    pt.add_argument("--polarity-dir", default=POLARITY_DIR,
                      help="Folder with pixel-aligned <base>_polarity.png attribute maps (same size as the source images).")
-    pt.add_argument("--polarity-aug", action="store_true",
+    pt.add_argument("--polarity-aug", dest="polarity_aug", action="store_true", default=POLARITY_AUG,
                      help="Add each train image's polarity-attribute variant as an extra training sample sharing the same box labels.")
+    pt.add_argument("--no-polarity-aug", dest="polarity_aug", action="store_false",
+                     help="Disable the polarity-attribute augmentation.")
+    pt.add_argument("--invert-dir", default=INVERT_DIR,
+                     help="Folder with true sign-inverted (data -> -data) re-rendered radargrams, "
+                          "produced by dataset2/polarity_features.py.")
+    pt.add_argument("--invert-aug", dest="invert_aug", action="store_true", default=INVERT_AUG,
+                     help="Add each train image's true sign-inverted render as an extra training sample "
+                          "sharing the same box labels (distinct from --polarity-aug's attribute map).")
+    pt.add_argument("--no-invert-aug", dest="invert_aug", action="store_false",
+                     help="Disable the true sign-inverted-render augmentation.")
     aug_group = pt.add_argument_group("augmentation (all off by default; override for ablations)")
     for name, (default, help_text) in AUG_PARAMS.items():
         aug_group.add_argument(f"--{name.replace('_', '-')}", type=float, default=default, help=help_text)
 
     pd = sub.add_parser("detect", help="Run a trained YOLO detector on images.")
-    pd.add_argument("--weights", required=True, help="Path to trained .pt weights (e.g. yolo_runs/train/weights/best.pt).")
-    pd.add_argument("--source", default=os.path.join(_HERE, "jixing-zhengchang"),
+    pd.add_argument("--weights", default=DETECT_WEIGHTS, help="Path to trained .pt weights (e.g. yolo_runs/train/weights/best.pt).")
+    pd.add_argument("--source", default=DETECT_SOURCE,
                      help="Image file or folder to run detection on.")
-    pd.add_argument("--work-dir", default=os.path.join(_HERE, "yolo_runs"), help="Output folder for detection results.")
-    pd.add_argument("--conf", type=float, default=0.25)
-    pd.add_argument("--imgsz", type=int, default=640)
+    pd.add_argument("--work-dir", default=WORK_DIR, help="Output folder for detection results.")
+    pd.add_argument("--conf", type=float, default=DETECT_CONF)
+    pd.add_argument("--imgsz", type=int, default=IMGSZ)
 
     return p
 
 
 def main():
-    args = build_argparser().parse_args()
+    # Clicking "Run" in an IDE invokes this with no argv at all, which would
+    # otherwise hit argparse's required subcommand error. Default to `train`
+    # (with all its own defaults, e.g. --invert-aug on) so that just works.
+    argv = sys.argv[1:]
+    if not argv or argv[0] not in ("train", "detect", "-h", "--help"):
+        argv = ["train"] + argv
+    args = build_argparser().parse_args(argv)
     if args.cmd == "train":
         train(args)
     elif args.cmd == "detect":
