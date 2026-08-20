@@ -196,8 +196,9 @@ def build_yolo_dataset(data_dir, work_dir, val_ratio=0.2, seed=0, polarity_dir=N
     return yaml_path
 
 
-def train(args):
-    from ultralytics import YOLO
+def train(args, model_cls=None):
+    if model_cls is None:
+        from ultralytics import YOLO as model_cls
 
     # Ultralytics resolves relative `project` paths against its own cwd
     # bookkeeping, not the caller's — a relative "../.." work-dir silently
@@ -214,7 +215,7 @@ def train(args):
         polarity_dir=args.polarity_dir, polarity_aug=args.polarity_aug,
         invert_dir=args.invert_dir, invert_aug=args.invert_aug,
     )
-    model = YOLO(args.model)
+    model = model_cls(args.model)
     aug_kwargs = {name: getattr(args, name) for name in AUG_PARAMS}
     # model.train() runs a final validation pass on best.pt internally and
     # returns those metrics directly, so a separate model.val() call would
