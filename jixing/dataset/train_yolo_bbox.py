@@ -196,7 +196,7 @@ def build_yolo_dataset(data_dir, work_dir, val_ratio=0.2, seed=0, polarity_dir=N
     return yaml_path
 
 
-def train(args, model_cls=None):
+def train(args, model_cls=None, cleanup_dataset=False):
     if model_cls is None:
         from ultralytics import YOLO as model_cls
 
@@ -234,6 +234,16 @@ def train(args, model_cls=None):
     print(f"[val] mAP50={metrics.box.map50:.4f}  mAP50-95={metrics.box.map:.4f}")
     best = os.path.join(args.work_dir, "train", "weights", "best.pt")
     print(f"[train] best weights -> {best}")
+
+    if cleanup_dataset:
+        # The copied images/labels (build_yolo_dataset above) are only
+        # needed while ultralytics is actively reading them during
+        # training; once metrics are captured, they're pure disk bloat --
+        # especially across large ablation sweeps that build a fresh copy
+        # per run. Weights/logs under work_dir/train are untouched.
+        dataset_dir = os.path.join(args.work_dir, "yolo_dataset")
+        shutil.rmtree(dataset_dir, ignore_errors=True)
+
     return best, metrics.box.map50, metrics.box.map
 
 

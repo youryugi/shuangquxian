@@ -73,7 +73,7 @@ def run_one(condition_name, invert_aug, seed, model, work_root):
         invert_aug=invert_aug,
         **aug_kwargs,
     )
-    _best, map50, map5095 = train(args)
+    _best, map50, map5095 = train(args, cleanup_dataset=True)
     return float(map50), float(map5095)
 
 

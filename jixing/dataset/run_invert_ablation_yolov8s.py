@@ -50,7 +50,7 @@ def run_one(invert_aug, seed):
         invert_aug=invert_aug,
         **{name: default for name, (default, _help) in AUG_PARAMS.items()},  # all built-in augs off
     )
-    _best, map50, map5095 = train(args)
+    _best, map50, map5095 = train(args, cleanup_dataset=True)
     return float(map50), float(map5095)
 
 

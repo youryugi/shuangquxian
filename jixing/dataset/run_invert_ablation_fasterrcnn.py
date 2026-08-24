@@ -36,6 +36,7 @@ Run inside the `gpr` conda env:
 import csv
 import os
 import random
+import shutil
 import statistics
 
 import torch
@@ -178,6 +179,13 @@ def run_one(invert_aug, seed):
 
     map50, map5095 = evaluate(model, val_loader)
     print(f"[val] mAP50={map50:.4f}  mAP50-95={map5095:.4f}")
+
+    # This script never checkpoints weights, so once metrics are captured
+    # the copied images/labels (build_yolo_dataset above) are pure disk
+    # bloat -- especially across a 10-run sweep that builds a fresh copy
+    # per run.
+    shutil.rmtree(dataset_dir, ignore_errors=True)
+
     return map50, map5095
 
 
