@@ -81,13 +81,14 @@ def run_one(condition_name, invert_aug, seed):
     return float(map50), float(map5095)
 
 
-def run_condition(condition_name):
+def run_condition(condition_name, seeds=None):
+    seeds = SEEDS if seeds is None else seeds
     condition_root = os.path.join(WORK_ROOT, condition_name)
     os.makedirs(condition_root, exist_ok=True)
     results_csv = os.path.join(condition_root, "results.csv")
     rows = []
     for invert_aug in (True, False):
-        for seed in SEEDS:
+        for seed in seeds:
             print(f"\n=== [{condition_name}] invert_aug={invert_aug} seed={seed} "
                   f"(aug={CONDITIONS[condition_name]}) ===")
             map50, map5095 = run_one(condition_name, invert_aug, seed)
@@ -113,6 +114,8 @@ def main():
     p.add_argument("--condition", choices=["all", *CONDITIONS.keys()], default=None,
                     help="Which leave-one-out condition to run. 'all' runs all 5 (~3h+).")
     p.add_argument("--list", action="store_true", help="Print condition names/aug values and exit.")
+    p.add_argument("--num-seeds", type=int, default=None,
+                    help=f"Override seed count, uses seeds 0..N-1 (default: module SEEDS={SEEDS}).")
     args = p.parse_args()
 
     if args.list or args.condition is None:
@@ -124,9 +127,10 @@ def main():
             print("\nPass --condition <name> or --condition all to run.")
             return
 
+    seeds = list(range(args.num_seeds)) if args.num_seeds is not None else None
     names = list(CONDITIONS) if args.condition == "all" else [args.condition]
     for name in names:
-        run_condition(name)
+        run_condition(name, seeds=seeds)
 
 
 if __name__ == "__main__":
