@@ -12,8 +12,10 @@ mAP50-95 per run plus the mean +/- std for each condition.
 Run inside the `gpr` conda env:
 
     conda activate gpr
-    python run_invert_ablation_default_aug.py
+    python run_invert_ablation_default_aug.py             # pretrained yolov8n.pt
+    python run_invert_ablation_default_aug.py --scratch    # yolov8n.yaml, random init
 """
+import argparse
 import csv
 import os
 import statistics
@@ -25,8 +27,7 @@ from train_yolo_bbox import (
 )
 
 SEEDS = [0, 1, 2, 3, 4]
-WORK_ROOT = os.path.join(WORK_DIR, "invert_ablation_default_aug")
-RESULTS_CSV = os.path.join(WORK_ROOT, "results.csv")
+SCRATCH_MODEL = "yolov8n.yaml"
 
 # Ultralytics' own out-of-the-box defaults (see the "ultralytics default ..."
 # notes in train_yolo_bbox.AUG_PARAMS). flipud is kept 0 -- vertically
@@ -50,12 +51,12 @@ YOLO_DEFAULT_AUG = {
 }
 
 
-def run_one(invert_aug, seed):
-    work_dir = os.path.join(WORK_ROOT, f"invert_{'on' if invert_aug else 'off'}_seed{seed}")
+def run_one(invert_aug, seed, model, work_root):
+    work_dir = os.path.join(work_root, f"invert_{'on' if invert_aug else 'off'}_seed{seed}")
     args = SimpleNamespace(
         data_dir=DATA_DIR,
         work_dir=work_dir,
-        model=MODEL,
+        model=model,
         epochs=EPOCHS,
         imgsz=IMGSZ,
         batch=BATCH,
@@ -72,14 +73,23 @@ def run_one(invert_aug, seed):
 
 
 def main():
-    os.makedirs(WORK_ROOT, exist_ok=True)
+    p = argparse.ArgumentParser()
+    p.add_argument("--scratch", action="store_true",
+                    help="Train from yolov8n.yaml (random init) instead of pretrained yolov8n.pt.")
+    args = p.parse_args()
+
+    model = SCRATCH_MODEL if args.scratch else MODEL
+    work_root = os.path.join(WORK_DIR, "invert_ablation_default_aug_scratch" if args.scratch else "invert_ablation_default_aug")
+    results_csv = os.path.join(work_root, "results.csv")
+
+    os.makedirs(work_root, exist_ok=True)
     rows = []
     for invert_aug in (True, False):
         for seed in SEEDS:
-            print(f"\n=== [default-aug] invert_aug={invert_aug} seed={seed} ===")
-            map50, map5095 = run_one(invert_aug, seed)
+            print(f"\n=== [default-aug, model={model}] invert_aug={invert_aug} seed={seed} ===")
+            map50, map5095 = run_one(invert_aug, seed, model, work_root)
             rows.append({"invert_aug": invert_aug, "seed": seed, "map50": map50, "map50_95": map5095})
-            with open(RESULTS_CSV, "w", newline="", encoding="utf-8") as f:
+            with open(results_csv, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=["invert_aug", "seed", "map50", "map50_95"])
                 writer.writeheader()
                 writer.writerows(rows)
@@ -92,7 +102,7 @@ def main():
         label = "invert_aug=ON " if invert_aug else "invert_aug=OFF"
         print(f"{label}  mAP50={statistics.mean(map50s):.4f}+/-{statistics.pstdev(map50s):.4f}  "
               f"mAP50-95={statistics.mean(map5095s):.4f}+/-{statistics.pstdev(map5095s):.4f}")
-    print(f"\n[ablation] per-run results -> {RESULTS_CSV}")
+    print(f"\n[ablation] per-run results -> {results_csv}")
 
 
 if __name__ == "__main__":

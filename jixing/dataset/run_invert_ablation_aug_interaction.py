@@ -33,6 +33,7 @@ Run inside the `gpr` conda env:
     conda activate gpr
     python run_invert_ablation_aug_interaction.py --condition no_mosaic
     python run_invert_ablation_aug_interaction.py --condition all       # all 5, ~3h+
+    python run_invert_ablation_aug_interaction.py --condition all --scratch  # yolov8n.yaml, random init
     python run_invert_ablation_aug_interaction.py --list                # show condition names, don't train
 """
 import argparse
@@ -48,7 +49,7 @@ from train_yolo_bbox import (
 from run_invert_ablation_default_aug import YOLO_DEFAULT_AUG
 
 SEEDS = [0, 1, 2]
-WORK_ROOT = os.path.join(WORK_DIR, "invert_ablation_aug_interaction")
+SCRATCH_MODEL = "yolov8n.yaml"
 
 # Each condition = the full default-aug recipe with exactly one of the 5
 # real (non-no-op) augmentations zeroed back out.
@@ -59,13 +60,13 @@ CONDITIONS = {
 }
 
 
-def run_one(condition_name, invert_aug, seed):
+def run_one(condition_name, invert_aug, seed, model, work_root):
     aug_kwargs = CONDITIONS[condition_name]
-    work_dir = os.path.join(WORK_ROOT, condition_name, f"invert_{'on' if invert_aug else 'off'}_seed{seed}")
+    work_dir = os.path.join(work_root, condition_name, f"invert_{'on' if invert_aug else 'off'}_seed{seed}")
     args = SimpleNamespace(
         data_dir=DATA_DIR,
         work_dir=work_dir,
-        model=MODEL,
+        model=model,
         epochs=EPOCHS,
         imgsz=IMGSZ,
         batch=BATCH,
@@ -81,17 +82,17 @@ def run_one(condition_name, invert_aug, seed):
     return float(map50), float(map5095)
 
 
-def run_condition(condition_name, seeds=None):
+def run_condition(condition_name, model, work_root, seeds=None):
     seeds = SEEDS if seeds is None else seeds
-    condition_root = os.path.join(WORK_ROOT, condition_name)
+    condition_root = os.path.join(work_root, condition_name)
     os.makedirs(condition_root, exist_ok=True)
     results_csv = os.path.join(condition_root, "results.csv")
     rows = []
     for invert_aug in (True, False):
         for seed in seeds:
-            print(f"\n=== [{condition_name}] invert_aug={invert_aug} seed={seed} "
+            print(f"\n=== [{condition_name}, model={model}] invert_aug={invert_aug} seed={seed} "
                   f"(aug={CONDITIONS[condition_name]}) ===")
-            map50, map5095 = run_one(condition_name, invert_aug, seed)
+            map50, map5095 = run_one(condition_name, invert_aug, seed, model, work_root)
             rows.append({"invert_aug": invert_aug, "seed": seed, "map50": map50, "map50_95": map5095})
             with open(results_csv, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=["invert_aug", "seed", "map50", "map50_95"])
@@ -116,6 +117,8 @@ def main():
     p.add_argument("--list", action="store_true", help="Print condition names/aug values and exit.")
     p.add_argument("--num-seeds", type=int, default=None,
                     help=f"Override seed count, uses seeds 0..N-1 (default: module SEEDS={SEEDS}).")
+    p.add_argument("--scratch", action="store_true",
+                    help="Train from yolov8n.yaml (random init) instead of pretrained yolov8n.pt.")
     args = p.parse_args()
 
     if args.list or args.condition is None:
@@ -127,10 +130,13 @@ def main():
             print("\nPass --condition <name> or --condition all to run.")
             return
 
+    model = SCRATCH_MODEL if args.scratch else MODEL
+    work_root = os.path.join(WORK_DIR, "invert_ablation_aug_interaction_scratch" if args.scratch
+                              else "invert_ablation_aug_interaction")
     seeds = list(range(args.num_seeds)) if args.num_seeds is not None else None
     names = list(CONDITIONS) if args.condition == "all" else [args.condition]
     for name in names:
-        run_condition(name, seeds=seeds)
+        run_condition(name, model, work_root, seeds=seeds)
 
 
 if __name__ == "__main__":
