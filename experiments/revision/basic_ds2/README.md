@@ -70,8 +70,8 @@
 | **4** | 11-14 深夜 | **paired initialization + 5-fold + 10 seeds** | **0.475** | **0.479** | **ΔF1 = +0.004 [−0.021, +0.028]，没有提升。正式结果** |
 | 5 | 11-15 | 诊断：分辨率问题？代码 bug？瓶颈在哪？ | — | — | 瓶颈是 FN（漏检）；约 4 成 FN 是框画小了；attention 解决的不是这个问题 |
 | 6 | 11-15 | 用 attention map 里的 band 把框扩大（不重新训练） | 0.475 | **0.541** | band 的信息有用，但没进入 box regression。只是 post-processing，不进论文 |
-| 7 | 11-15 | upper bound：真实 band 直接送进 fusion（训练和 inference 都给） | 0.475 | 跑中 | 区分"band 预测得不够好"和"fusion 用不上 band" |
-| 8 | 11-15 | 尺寸信息进网络：a) extent features fusion；b) 检测头搬到 stride 4 | — | 跑中 | 把 Round 6 的 +0.063 变成网络自己的能力 |
+| 7 | 11-15 | upper bound：真实 band 直接送进 fusion（训练和 inference 都给） | 0.475 | 36/50 run，初步 ≈ baseline | **初步：真实 band 走现有 fusion 也没有提升（Δ +0.003，18 胜 18 负）→ 瓶颈是 fusion 通路，不是 band 质量**。待补 fold 4 |
+| 8 | 11-15 | 尺寸信息进网络：a) extent features fusion；b) 检测头搬到 stride 4 | — | 待跑（换机器） | 把 Round 6 的 +0.063 变成网络自己的能力 |
 | 9 | 11-15 | 数据量曲线：训练集 25% / 50% | — | 待跑 | 提升是否在数据更少时出现 |
 | 10 | 11-15 | λ = 0.1 / 0.3 / 1.5 + gate fusion | — | 待跑 | 审稿人会问的对照 |
 
@@ -314,7 +314,19 @@ attention head 看不全一条双曲线，所以它"不知道两翼在哪里结�
 - 如果 F1 大涨：fusion 通路能利用 band，瓶颈是 band 预测质量，下一步该提升 band 的完整度。
 - 如果 F1 基本不动：1 通道 pooling 后 concat 这条通路本身就传不了尺寸信息，再在它上面调 λ 没有意义。
 
-**结果**：跑中。
+**结果（初步，36/50 run；fold 0–2 各 10 seeds，fold 3 有 6 seeds，fold 4 没跑；11-15 停机换新机器）**
+
+| fold | seeds | baseline | +attention | oracle（真实 band） | Δ oracle − baseline（paired） | 正/负 |
+|---|---|---|---|---|---|---|
+| 0 | 10 | 0.514 | 0.509 | 0.538 | +0.024 | 6/4 |
+| 1 | 10 | 0.461 | 0.472 | 0.455 | −0.006 | 5/5 |
+| 2 | 10 | 0.499 | 0.523 | 0.511 | +0.012 | 6/4 |
+| 3 | 6 | 0.368 | 0.356 | 0.339 | −0.029 | 1/5 |
+| 合计 | 36 | | | | **+0.003**（std 0.092） | **18/18** |
+
+**初步判断**：**把人工标注的真实 band 送进现在的 fusion 通路，F1 也不涨。** 这是第二种情形：1 通道 pooling 后 concat 这条通路本身传不了尺寸信息，再调 λ、再提升 band 预测质量都没有意义。对比 Round 6：同一份真实 band 用在 post-processing 上能到 0.587。信息在，通路不行。这直接支持 Round 8 的方向（换 fusion 方式 / 在 stride 4 做 fusion）。
+
+正式结论要等 fold 4 的 10 个 run 和 fold 3 剩下的 4 个补齐后用 `aggregate_cv.py` 做 5-fold 合并的 paired 统计（现在每个 seed 都缺 fold 4，合并统计算不出来）。
 
 ---
 
@@ -357,6 +369,38 @@ b) **检测头搬到 stride 4**（`--det-stride 4`）：bottleneck 特征最近�
 **结果**：待跑。
 
 ---
+
+## 在新机器上继续
+
+**2026-11-15 状态**：本机停跑，换到新 GPU 机器。仓库历史已重置为单个提交并推到 GitHub（旧的 12 GB 历史删除）。每个 run 的轻量结果（`preds_*.json`、`metrics*.json`、`run_info.json`、`train_log.csv`、控制台日志）已入库；权重 `*.pth`、可视化图和 `*.npz` 没有入库。
+
+```bash
+git clone https://github.com/youryugi/shuangquxian.git
+cd shuangquxian
+pip install -r requirements.txt        # torch 按新机器的 CUDA 版本装，见文件内注释
+
+# 1. 重建 prepare_data.py 的数据目录（datasets/ 不入库，约 1 分钟）
+cd experiments/revision/detector_comparison
+for f in 0 1 2 3 4; do
+  python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source hbat
+  python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source official
+done
+
+# 2. 续跑。run_seeds.py 会跳过已有 metrics.json 的 run
+cd ../basic_ds2
+python run_seeds.py --exps hbatbox_aug_oracle --jobs 8                              # Round 7 补齐 14 个 run
+python run_seeds.py --exps hbatbox_aug_abs_extent hbatbox_aug_oracle_extent hbatbox_aug_none_s4 hbatbox_aug_abs_s4 --jobs 8   # Round 8
+python run_seeds.py --exps hbatbox_aug_none_frac50 hbatbox_aug_abs_frac50 hbatbox_aug_none_frac25 hbatbox_aug_abs_frac25 --jobs 8   # Round 9
+python run_seeds.py --exps hbatbox_aug_abs_lam0.1 hbatbox_aug_abs_lam0.3 hbatbox_aug_abs_lam1.5 hbatbox_aug_abs_gate --jobs 8        # Round 10
+
+# 3. 汇总（含所有配对）
+python aggregate_cv.py
+```
+
+两点注意：
+- **换 GPU 后结果不再和本机逐位一致**（kernel 不同），但 paired initialization 由 CPU 的 seed 决定，跨机器相同，配对比较仍然成立。更干净的做法是把 Round 4 的两个主 arm（`hbatbox_aug_none`、`hbatbox_aug_abs`）在新机器上也重跑一遍：先把 `runs_cv/ds2/hbatbox_aug_none` 和 `hbatbox_aug_abs` 改名备份，再跑，这样所有配对都在同一张卡上。5090 上 100 个 run 约 20–30 分钟。
+- `--jobs` 在 5090 上可开 8–12，`--workers 1`；本机 5060 Ti 是 `--jobs 4 --workers 2`。
+- Round 6 的 `refine_with_band.py infer` 需要 `final.pth`，新机器上要先重跑 `hbatbox_aug_abs` 才有权重；`refine` 阶段只读 npz，也要重新 infer。
 
 ## 下一步
 
