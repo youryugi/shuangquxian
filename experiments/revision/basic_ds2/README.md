@@ -693,6 +693,7 @@ Round 4 起所有正式数字都按这套设置。
 | `refine_with_band.py` / `vis_refine.py` | 用 band 修正框 + 可视化 | 6 |
 | `diag_strata.py` | 分层 recall + 定位质量分析，只读 `runs_cv` 的预测 → `runs_cv/strata/`（Round 11）、`runs_cv/strata_r12/`（Round 12）、`runs_cv/strata_r13/`（Round 13） | 11–13 |
 | `infer_bandbox.py` | band → 框尺寸的推理步骤：`infer` 用已有 `final.pth` 重推理并缓存注意力图；`build` 在合并验证集上全局选参，生成 `*_bandbox` / `*_gtbandbox` / `*_scale` 六个新实验的 run 目录（`runs_cv/bandbox/chosen.json`、`sweep.md`，按变体合并）；`infer --exps` 只做指定实验、已有缓存跳过 | 12, 13 |
+| `vis_errors.py` | 逐图画出预测 vs 真值：命中 GT（绿）/ 漏检 GT（橙，FN）/ 命中预测（蓝）/ 误检预测（红，FP），可叠加预测 band；多个 exp 并排。协议同 `aggregate_cv.py`（合并验证集阈值、IoU 0.5 贪心匹配）→ `runs_cv/vis_errors/seed<k>/{<stem>.png, index.md, errors.csv}`（png 不入库） | 诊断 |
 
 **结果**
 
