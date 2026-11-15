@@ -1,6 +1,6 @@
 """第 12 轮：把"band → 框尺寸"做进推理，作为方法正式的输出（不重训，用 runs_cv 里已有的 final.pth）。
 
-    python infer_bandbox.py infer    # 重新推理 none / abs / oracle 三个实验的 150 个 run，缓存检测与注意力图（runs_cv/bandbox_cache/，不入库）
+    python infer_bandbox.py infer    # 重新推理 SRC_EXPS 里各实验的 run，缓存检测与注意力图（runs_cv/bandbox_cache/，不入库）；已有缓存的跳过（--force 重做），--exps 只做指定实验
     python infer_bandbox.py build    # 在合并验证集上全局选参，生成下面几个"新实验"的 run 目录（preds_*.json + metrics*.json），之后 aggregate_cv.py 直接配对
 
 生成的实验（都写到 runs_cv/ds2/<exp>/f<fold>_seed<k>/，格式与 train_basic.py 的输出相同）：
@@ -9,6 +9,8 @@
     hbatbox_aug_oracle_gtbandbox   上限：oracle 模型（真实 band 融合）的检测 + 真实 band 修正
     hbatbox_aug_none_scale         对照：baseline 的框绕中心等比放大 k 倍（k 验证集全局选）——"框普遍画小了，随便放大就行"这个解释
     hbatbox_aug_abs_scale          对照：+attention 的框等比放大 k 倍
+    hbatbox_aug_boxmask_bandbox    对照（第 13 轮）：attention 头用填实的 HBAT 框当监督（masks_box，没有 band 形状），检测 + 用预测的框掩码做同样的 mask → 框步骤。
+                                   回答"收益来自稠密头估尺寸，还是来自双曲线 band 的形状"
 
 修正规则（refine_with_band.refine_image）：注意力图放大到输入分辨率、按 t 二值化得到 band；分数 ≥ s_seed 的检测为种子，
 band 像素按最近种子划分（切开相邻双曲线）；每个种子只取与原框相连的连通块，取外接框；mode = union（原框 ∪ 带框，只扩不缩）/ replace / blend。
@@ -40,7 +42,7 @@ CACHE = HERE / "runs_cv" / "bandbox_cache"
 OUT = HERE / "runs_cv" / "bandbox"
 DATASETS = HERE.parent / "detector_comparison" / "datasets"
 FOLDS, SEEDS = list(range(5)), list(range(10))
-SRC_EXPS = ("hbatbox_aug_none", "hbatbox_aug_abs", "hbatbox_aug_oracle")
+SRC_EXPS = ("hbatbox_aug_none", "hbatbox_aug_abs", "hbatbox_aug_oracle", "hbatbox_aug_boxmask")
 K_GRID = (1.0, 1.05, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5, 1.6)
 
 
@@ -58,11 +60,13 @@ def cache_dir(exp, fold, seed):
 
 # ───────────────────────── 阶段 1：推理 ─────────────────────────
 @torch.no_grad()
-def infer():
-    max_diff = {e: 0.0 for e in SRC_EXPS}
-    for exp in SRC_EXPS:
+def infer(exps=SRC_EXPS, force=False):
+    max_diff = {e: 0.0 for e in exps}
+    for exp in exps:
         for fold, seed in itertools.product(FOLDS, SEEDS):
             rd = run_dir(exp, fold, seed)
+            if not force and all((cache_dir(exp, fold, seed) / f"{n}_{ph}.json").exists() for n in ("dets", "meta") for ph in ("val", "test")):
+                continue
             info = json.load(open(rd / "run_info.json", encoding="utf-8"))
             mode = info["mode"]
             configure_det_stride(info.get("det_stride", 8))
@@ -146,14 +150,32 @@ VARIANTS = {
     "hbatbox_aug_oracle_gtbandbox": ("hbatbox_aug_oracle", list(itertools.product(SEED_GRID, MODES))),
     "hbatbox_aug_none_scale":       ("hbatbox_aug_none",   [(k,) for k in K_GRID]),
     "hbatbox_aug_abs_scale":        ("hbatbox_aug_abs",    [(k,) for k in K_GRID]),
+    # 第 13 轮：box-mask 对照，参数网格与方法完全相同
+    "hbatbox_aug_boxmask_bandbox":  ("hbatbox_aug_boxmask", list(itertools.product(T_GRID, SEED_GRID, MODES))),
 }
+
+
+def merge_sweep(new_sections):
+    """sweep.md 按变体分节；重建的变体替换对应节，其余保留。"""
+    old = {}
+    if (OUT / "sweep.md").exists():
+        cur = None
+        for line in (OUT / "sweep.md").read_text(encoding="utf-8").splitlines():
+            if line.startswith("## "):
+                cur = line[3:].split("（")[0].strip(); old[cur] = []
+            if cur is not None:
+                old[cur].append(line)
+    old.update(new_sections)
+    body = "\n".join(l for v in old.values() for l in v)
+    (OUT / "sweep.md").write_text("# band → 框参数敏感性（第 12 / 13 轮；选参只用验证列，测试列仅供查看）\n\n" + body.rstrip("\n") + "\n", encoding="utf-8")
 
 
 def build(variants):
     gt_val = {f: json.load(open(data_dir(f) / "gt_boxes.json", encoding="utf-8"))["val"] for f in FOLDS}
     gt_test = {f: json.load(open(data_dir(f) / "gt_boxes.json", encoding="utf-8"))["test"] for f in FOLDS}
     OUT.mkdir(parents=True, exist_ok=True)
-    chosen, sweep_lines = {}, []
+    chosen = json.load(open(OUT / "chosen.json", encoding="utf-8")) if (OUT / "chosen.json").exists() else {}
+    sweep_sections = {}
     for variant in variants:
         src, grid = VARIANTS[variant]
         print(f"== {variant}  (source {src}, {len(grid)} configs)", flush=True)
@@ -172,12 +194,12 @@ def build(variants):
         best = max(grid, key=lambda c: np.mean(val_f1[c]))
         chosen[variant] = {"source_exp": src, "config": list(best), "val_F1_mean": float(np.mean(val_f1[best])),
                            "test_F1_mean_at_chosen": float(np.mean(test_f1[best]))}
-        sweep_lines += [f"## {variant}（来源 {src}）", "", f"选中（按 10 seed 合并验证 F1 均值）：{best}", "",
+        lines = [f"## {variant}（来源 {src}）", "", f"选中（按 10 seed 合并验证 F1 均值）：{best}", "",
                         "| 参数 | 合并验证 F1 均值 | 测试 F1 均值 ± std（只看敏感性） |", "|---|---|---|"]
         for c in grid:
             mark = " **←**" if c == best else ""
-            sweep_lines.append(f"| {c} | {np.mean(val_f1[c]):.3f} | {np.mean(test_f1[c]):.3f} ± {np.std(test_f1[c], ddof=1):.3f}{mark} |")
-        sweep_lines.append("")
+            lines.append(f"| {c} | {np.mean(val_f1[c]):.3f} | {np.mean(test_f1[c]):.3f} ± {np.std(test_f1[c], ddof=1):.3f}{mark} |")
+        lines.append(""); sweep_sections[variant] = lines
         # 写 run 目录（选中的参数）
         for seed in SEEDS:
             pv, pt = cache_preds[(seed, best)]
@@ -195,13 +217,15 @@ def build(variants):
                         evaluate_run(rd, data_dir(f), gt_name=f"gt_boxes_{alt}.json", out_name=f"metrics_{alt}.json")
         print(f"  chosen {best}: val F1 {chosen[variant]['val_F1_mean']:.3f}, test F1 {chosen[variant]['test_F1_mean_at_chosen']:.3f}", flush=True)
     json.dump(chosen, open(OUT / "chosen.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    (OUT / "sweep.md").write_text("# 第 12 轮参数敏感性（选参只用验证列；测试列仅供查看）\n\n" + "\n".join(sweep_lines), encoding="utf-8")
+    merge_sweep(sweep_sections)
     print(json.dumps(chosen, ensure_ascii=False, indent=1))
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stage", choices=["infer", "build"])
-    ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=list(VARIANTS))
+    ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=list(VARIANTS), help="build 阶段：要生成的变体")
+    ap.add_argument("--exps", nargs="+", default=list(SRC_EXPS), choices=list(SRC_EXPS), help="infer 阶段：要重推理的源实验")
+    ap.add_argument("--force", action="store_true", help="infer 阶段：已有缓存也重做")
     args = ap.parse_args()
-    infer() if args.stage == "infer" else build(args.variants)
+    infer(args.exps, args.force) if args.stage == "infer" else build(args.variants)

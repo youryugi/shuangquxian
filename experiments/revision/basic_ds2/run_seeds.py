@@ -45,6 +45,8 @@ EXPS = {
     "hbatbox_aug_abs_lam0.3":  ("_hbatbox", ["--mode", "abs", "--augment", "--lam-att", "0.3"]),
     "hbatbox_aug_abs_lam1.5":  ("_hbatbox", ["--mode", "abs", "--augment", "--lam-att", "1.5"]),
     "hbatbox_aug_abs_gate":    ("_hbatbox", ["--mode", "abs", "--augment", "--fuse", "gate"]),
+    # ── 第 13 轮：对照——attention 头用填实的 HBAT 框当监督（masks_box，没有任何 band 形状），之后做同样的 mask → 框步骤
+    "hbatbox_aug_boxmask":     ("_hbatbox", ["--mode", "abs", "--augment", "--mask-dir", "masks_box"]),
 }
 DEFAULT_EXPS = ["hbatbox_aug_none", "hbatbox_aug_abs", "aug_none", "aug_abs"]
 

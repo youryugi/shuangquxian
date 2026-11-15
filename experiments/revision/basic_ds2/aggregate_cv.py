@@ -46,7 +46,11 @@ DEFAULT_PAIRS = ["hbatbox_aug_none:hbatbox_aug_abs", "aug_none:aug_abs", "hbatbo
                  "hbatbox_aug_none:hbatbox_aug_abs_bandbox", "hbatbox_aug_abs:hbatbox_aug_abs_bandbox",
                  "hbatbox_aug_none:hbatbox_aug_none_scale", "hbatbox_aug_abs:hbatbox_aug_abs_scale",
                  "hbatbox_aug_none_scale:hbatbox_aug_abs_bandbox", "hbatbox_aug_abs_scale:hbatbox_aug_abs_bandbox",
-                 "hbatbox_aug_abs_bandbox:hbatbox_aug_abs_gtbandbox", "hbatbox_aug_none:hbatbox_aug_oracle_gtbandbox"]
+                 "hbatbox_aug_abs_bandbox:hbatbox_aug_abs_gtbandbox", "hbatbox_aug_none:hbatbox_aug_oracle_gtbandbox",
+                 # 第 13 轮：box-mask 对照（attention 头用填实的 HBAT 框监督，再做同样的 mask → 框）
+                 "hbatbox_aug_none:hbatbox_aug_boxmask", "hbatbox_aug_abs:hbatbox_aug_boxmask",
+                 "hbatbox_aug_none:hbatbox_aug_boxmask_bandbox", "hbatbox_aug_boxmask:hbatbox_aug_boxmask_bandbox",
+                 "hbatbox_aug_none_scale:hbatbox_aug_boxmask_bandbox", "hbatbox_aug_boxmask_bandbox:hbatbox_aug_abs_bandbox"]
 
 
 def data_dir_of(run_info, fold):
