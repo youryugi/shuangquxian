@@ -2,7 +2,7 @@
 
 **要回答的问题**：论文说"用 hyperbola band mask 监督 attention，检测 F1 从 0.67 升到 0.73"（Table IV）。换上重新标注的数据，用更严格的实验方法再跑一遍，这个提升还在吗？
 
-**答案（截至 2026-11-15）**：**不在。** 严格方法下 ΔF1 = +0.004，95% CI [−0.021, +0.028]，和 0 没有区别。原来的提升是实验方法有漏洞造成的。不过 attention 分支并不是什么都没学到：它学到了"目标有多大"，只是这个信息没有用到 box regression 上（见 Round 6）。
+**答案（截至 2026-11-15 晚，Round 4–10 全部跑完）**：**基本不在。** 严格方法下 +attention 的 ΔF1 在两次硬件复现里分别是 +0.004 [−0.021, +0.028]（5060 Ti）和 +0.019 [+0.004, +0.035]（5090），也就是 0.47 → 0.49 这个量级；换一块显卡重跑同一配置本身就能让一个 arm 动 ±0.013，所以这个量级的效应没有稳健的证据。原来论文的 +0.06 是实验方法有漏洞造成的。把**人工标注的真实 band** 送进 fusion 也只有 +0.03（Round 7）、换成 extent features 也只有 +0.04（Round 8）：现有 fusion 通路的上限就这么高，而同一份 band 用在 post-processing 上能到 +0.11（Round 6）。λ、gate、stride 4、数据量都不能把差距拉大（Round 8–10）。
 
 **最重要的待办**：在数据集 1（论文主数据）上用同样的严格方法再跑一次，然后决定论文的主张怎么改。
 
@@ -67,13 +67,13 @@
 | 1 | 11-14 下午 | 误用了旧标注（HBAT 启动时没加 `--out`） | 0.42 | 0.41 | **作废** |
 | 2 | 11-14 晚 | 新标注、official box、single fold、1–3 seeds | 0.44 | 0.44 | 两个 arm 分数一样；比论文低 0.3；不同 seed 之间波动很大 |
 | 3 | 11-14 晚 | 改用 HBAT box（一条双曲线一个框）、开水平翻转增强，3 seeds | 0.52 | 0.57 | 整体分数上来了；看起来 +0.04，但只有 3 个 seed |
-| **4** | 11-14 深夜 | **paired initialization + 5-fold + 10 seeds** | **0.475** | **0.479** | **ΔF1 = +0.004 [−0.021, +0.028]，没有提升。正式结果** |
+| **4** | 11-14 深夜；11-15 在 5090 上重跑 | **paired initialization + 5-fold + 10 seeds** | **0.475 / 0.473** | **0.479 / 0.492** | **ΔF1 = +0.004 [−0.021, +0.028]（5060 Ti）/ +0.019 [+0.004, +0.035]（5090）。两次复现都在 0.02 以内，和换显卡带来的差别（+0.013）同量级。正式结果** |
 | 5 | 11-15 | 诊断：分辨率问题？代码 bug？瓶颈在哪？ | — | — | 瓶颈是 FN（漏检）；约 4 成 FN 是框画小了；attention 解决的不是这个问题 |
 | 6 | 11-15 | 用 attention map 里的 band 把框扩大（不重新训练） | 0.475 | **0.541** | band 的信息有用，但没进入 box regression。只是 post-processing，不进论文 |
-| 7 | 11-15 | upper bound：真实 band 直接送进 fusion（训练和 inference 都给） | 0.475 | 36/50 run，初步 ≈ baseline | **初步：真实 band 走现有 fusion 也没有提升（Δ +0.003，18 胜 18 负）→ 瓶颈是 fusion 通路，不是 band 质量**。待补 fold 4 |
-| 8 | 11-15 | 尺寸信息进网络：a) extent features fusion；b) 检测头搬到 stride 4 | — | 待跑（换机器） | 把 Round 6 的 +0.063 变成网络自己的能力 |
-| 9 | 11-15 | 数据量曲线：训练集 25% / 50% | — | 待跑 | 提升是否在数据更少时出现 |
-| 10 | 11-15 | λ = 0.1 / 0.3 / 1.5 + gate fusion | — | 待跑 | 审稿人会问的对照 |
+| 7 | 11-15 | upper bound：真实 band 直接送进 fusion（训练和 inference 都给） | 0.473 | 0.505（oracle） | **真实 band 走现有 concat fusion 只有 +0.032 [+0.019, +0.045]（9 胜 1 负）；学出来的 attention 拿到其中的 +0.019。通路的上限本身就低** |
+| 8 | 11-15 | 尺寸信息进网络：a) extent features fusion；b) 检测头搬到 stride 4 | 0.473 / 0.463 | 0.484 / 0.434 | a) +0.011 [−0.015, +0.034]，不比默认 concat 好；真实 band + extent 的上限 0.516（+0.043）。b) stride 4 反而变差（−0.029，seed 间方差翻倍）。**都没有把 Round 6 的 +0.11 变成网络自己的能力** |
+| 9 | 11-15 | 数据量曲线：训练集 25% / 50% | 0.263 / 0.390 | 0.242 / 0.395 | 数据减半 Δ = +0.005；只剩 1/4 时 Δ = −0.021 [−0.036, −0.008]（2 胜 8 负）。**数据越少 attention 监督越不帮忙，不是"小样本先验"** |
+| 10 | 11-15 | λ = 0.1 / 0.3 / 1.5 + gate fusion | 0.473 | 0.474 / 0.472 / 0.468 / 0.480 | λ 从 0.1 到 1.5，Δ 全在 [−0.005, +0.019] 之间、CI 都盖住 0；gate +0.007 [−0.012, +0.026]。**λ 和 fusion 方式都不是原因** |
 
 ---
 
@@ -169,6 +169,16 @@
 **paired 差值**（+attention − baseline）：**ΔF1 = +0.004，95% CI [−0.021, +0.028]，Wilcoxon p = 0.56，10 个 seed 中 7 个为正、3 个为负**。AP50 的差值同样在 0 附近。official box 那一组也一样（+0.009 [−0.012, +0.031]）。
 
 每个 seed 的 ΔF1：+0.028, +0.003, −0.035, +0.019, +0.080, +0.007, −0.078, +0.003, +0.026, −0.013。
+
+**11-15 在 5090 上的重跑**（同一代码、同一 seed，结果目录 `runs_cv/ds2/hbatbox_aug_none` / `hbatbox_aug_abs`；上面这批 5060 Ti 的原始结果改名为 `*_win5060ti`）：
+
+| arm | 5060 Ti | 5090 | 同配置换卡的 paired Δ |
+|---|---|---|---|
+| baseline | 0.475 ± 0.028 | 0.473 ± 0.024 | −0.002 [−0.029, +0.028] |
+| +attention | 0.479 ± 0.021 | 0.492 ± 0.031 | +0.013 [−0.005, +0.031] |
+| **ΔF1（+attention − baseline）** | **+0.004 [−0.021, +0.028]**，p = 0.56，7/0/3 | **+0.019 [+0.004, +0.035]**，p = 0.037，7/0/3 | |
+
+换卡只改变浮点 kernel，paired initialization 和数据顺序完全相同，但同一配置的 10 个 seed 平均还是动了 0.002–0.013，单个 seed 动 ±0.05。也就是说 **+attention 的效应（+0.004 到 +0.019）和"换一块显卡"属于同一量级**：5090 上 CI 刚好不含 0，5060 Ti 上含 0，两者都是真实的测量。论文里应如实报告两次。
 
 **学到什么**
 
@@ -314,19 +324,17 @@ attention head 看不全一条双曲线，所以它"不知道两翼在哪里结�
 - 如果 F1 大涨：fusion 通路能利用 band，瓶颈是 band 预测质量，下一步该提升 band 的完整度。
 - 如果 F1 基本不动：1 通道 pooling 后 concat 这条通路本身就传不了尺寸信息，再在它上面调 λ 没有意义。
 
-**结果（初步，36/50 run；fold 0–2 各 10 seeds，fold 3 有 6 seeds，fold 4 没跑；11-15 停机换新机器）**
+**结果（5090 上 50 个 run 全部重跑，5-fold 合并，n = 10 seeds；baseline / +attention 也在同一块卡上重跑，见"在新机器上继续"）**
 
-| fold | seeds | baseline | +attention | oracle（真实 band） | Δ oracle − baseline（paired） | 正/负 |
+| A → B | F1 A | F1 B | ΔF1 [95% CI] | Wilcoxon p | 胜/平/负 | ΔAP50 [95% CI] |
 |---|---|---|---|---|---|---|
-| 0 | 10 | 0.514 | 0.509 | 0.538 | +0.024 | 6/4 |
-| 1 | 10 | 0.461 | 0.472 | 0.455 | −0.006 | 5/5 |
-| 2 | 10 | 0.499 | 0.523 | 0.511 | +0.012 | 6/4 |
-| 3 | 6 | 0.368 | 0.356 | 0.339 | −0.029 | 1/5 |
-| 合计 | 36 | | | | **+0.003**（std 0.092） | **18/18** |
+| baseline → oracle（真实 band） | 0.473 | 0.505 | **+0.032 [+0.019, +0.045]** | 0.004 | 9/0/1 | +0.037 [+0.022, +0.052] |
+| +attention → oracle | 0.492 | 0.505 | +0.014 [−0.005, +0.031] | 0.193 | 6/0/4 | −0.002 [−0.035, +0.027] |
+| baseline → +attention（同卡重跑，供对照） | 0.473 | 0.492 | +0.019 [+0.004, +0.035] | 0.037 | 7/0/3 | +0.039 [+0.011, +0.072] |
 
-**初步判断**：**把人工标注的真实 band 送进现在的 fusion 通路，F1 也不涨。** 这是第二种情形：1 通道 pooling 后 concat 这条通路本身传不了尺寸信息，再调 λ、再提升 band 预测质量都没有意义。对比 Round 6：同一份真实 band 用在 post-processing 上能到 0.587。信息在，通路不行。这直接支持 Round 8 的方向（换 fusion 方式 / 在 stride 4 做 fusion）。
+oracle 的 10 个 seed 之间 std 只有 0.011（baseline 0.024、+attention 0.031）：真实 band 让训练稳定了，但均值只高 0.03。
 
-正式结论要等 fold 4 的 10 个 run 和 fold 3 剩下的 4 个补齐后用 `aggregate_cv.py` 做 5-fold 合并的 paired 统计（现在每个 seed 都缺 fold 4，合并统计算不出来）。
+**判断**：**真实 band 走现有 concat fusion 通路，上限是 +0.03。** 这推翻了 11-15 下午基于 36 个 run、按单折统计的初步判断（"≈ baseline"）——那批数字每折只有 27 张测试图、std 0.09，分辨不出 0.03 的差别。现在的结论介于两种预设情形之间：通路能用 band，但只能换来 0.03；学出来的 attention（band IoU 约 0.38）拿到了其中的 +0.019。对比 Round 6：同一份真实 band 用在 post-processing 上能到 0.587（+0.11）。信息在，通路只传过来四分之一。
 
 ---
 
@@ -342,7 +350,18 @@ b) **检测头搬到 stride 4**（`--det-stride 4`）：bottleneck 特征最近�
 
 **为什么**：Round 5、6 说明 band 能提供"目标有多大"，但 1 格宽的 attention map 到检测头时只剩"这里有东西"。a 直接把尺寸算成特征；b 让 fusion 发生在 band 还有 2 格厚的时候。
 
-**结果**：跑中。
+**结果**（5-fold 合并，n = 10）：
+
+| A → B | F1 A | F1 B | ΔF1 [95% CI] | p | 胜/平/负 |
+|---|---|---|---|---|---|
+| baseline → +attention, extent fusion | 0.473 | 0.484 | +0.011 [−0.015, +0.034] | 0.322 | 8/0/2 |
+| +attention (concat) → +attention (extent) | 0.492 | 0.484 | −0.008 [−0.034, +0.016] | 0.770 | 4/0/6 |
+| baseline → oracle + extent（这条路的上限） | 0.473 | 0.516 | **+0.043 [+0.024, +0.061]** | 0.004 | 9/0/1 |
+| baseline_s4 → +attention_s4 | 0.463 | 0.434 | −0.029 [−0.092, +0.016] | 0.846 | 6/0/4 |
+| baseline → baseline_s4 | 0.473 | 0.463 | −0.010 [−0.048, +0.029] | 0.695 | 5/0/5 |
+| +attention → +attention_s4 | 0.492 | 0.434 | −0.057 [−0.113, −0.010] | 0.064 | 2/0/8 |
+
+**判断**：a) extent features 把真实 band 的上限从 +0.032 提到 +0.043，但学出来的 attention 配 extent 并不比配 concat 好（−0.008）：瓶颈回到 band 预测质量（IoU 0.38），不是特征的形式。b) 检测头搬到 stride 4 是死路：baseline 本身没变好，加 attention 反而更差，而且 seed 之间的 std 从 0.03 涨到 0.06–0.09（56×56 上 3.4 M 参数、91 张图，训练更不稳定）。**两条路都没有把 Round 6 的 +0.11 变成网络自己的能力。**
 
 ---
 
@@ -354,7 +373,15 @@ b) **检测头搬到 stride 4**（`--det-stride 4`）：bottleneck 特征最近�
 
 **为什么**：直接回答"数据量是不是硬伤"。如果 ΔF1 随数据减少而变大，可以主张"band 监督是小样本下的有效先验"；如果不变，就彻底排除"数据量掩盖了效应"的解释。
 
-**结果**：待跑。
+**结果**（5-fold 合并，n = 10；每折训练图 91 → 46 → 23 张）：
+
+| 训练集 | baseline F1 | +attention F1 | ΔF1 [95% CI] | p | 胜/平/负 | +attention 的 band IoU |
+|---|---|---|---|---|---|---|
+| 100%（91 张） | 0.473 | 0.492 | +0.019 [+0.004, +0.035] | 0.037 | 7/0/3 | 0.38 |
+| 50%（46 张） | 0.390 | 0.395 | +0.005 [−0.019, +0.025] | 0.432 | 7/0/3 | 0.35 |
+| 25%（23 张） | 0.263 | 0.242 | **−0.021 [−0.036, −0.008]** | 0.020 | 2/0/8 | 0.33 |
+
+**判断**：数据量确实是绝对精度的硬伤（91 → 23 张，F1 掉一半），但 Δ 并没有随数据减少而变大，反而在 23 张时变成显著的负值：图少的时候 attention 分支学不到像样的 band，还占用了检测头的容量。**"band 监督是小样本下的有效先验"这个主张不成立**，也排除了"数据量掩盖了效应"的解释。
 
 ---
 
@@ -366,7 +393,17 @@ b) **检测头搬到 stride 4**（`--det-stride 4`）：bottleneck 特征最近�
 
 **为什么**：审稿人一定会问；排除"attention loss 权重太大"和"fusion 方式太弱"两种解释。
 
-**结果**：待跑。
+**结果**（5-fold 合并，n = 10，都和同卡重跑的 baseline 0.473 配对）：
+
+| 配置 | +attention F1 | ΔF1 [95% CI] | p | 胜/平/负 | band IoU |
+|---|---|---|---|---|---|
+| λ = 0.1 | 0.474 ± 0.025 | +0.001 [−0.020, +0.023] | 0.846 | 6/0/4 | 0.37 |
+| λ = 0.3 | 0.472 ± 0.024 | −0.001 [−0.021, +0.016] | 0.695 | 6/0/4 | 0.38 |
+| λ = 0.7（默认，Round 4 重跑） | 0.492 ± 0.031 | +0.019 [+0.004, +0.035] | 0.037 | 7/0/3 | 0.38 |
+| λ = 1.5 | 0.468 ± 0.038 | −0.005 [−0.026, +0.015] | 0.625 | 5/0/5 | — |
+| gate fusion（λ = 0.7） | 0.480 ± 0.022 | +0.007 [−0.012, +0.026] | 0.492 | 6/0/4 | 0.39 |
+
+**判断**：λ 从 0.1 到 1.5 之间 band IoU 几乎不变（0.37–0.38），ΔF1 在 −0.005 到 +0.019 之间无规律地波动，默认的 0.7 恰好是最好的一个——这更像是 10 个 seed 的抽样波动，而不是 λ 的效应。gate 和 concat 没有区别。**"attention loss 权重太大"和"fusion 方式太弱"两种解释都排除。**
 
 ---
 
@@ -402,20 +439,27 @@ python aggregate_cv.py
 - `--jobs` 在 5090 上可开 8–12，`--workers 1`；本机 5060 Ti 是 `--jobs 4 --workers 2`。
 - Round 6 的 `refine_with_band.py infer` 需要 `final.pth`，新机器上要先重跑 `hbatbox_aug_abs` 才有权重；`refine` 阶段只读 npz，也要重新 infer。
 
+### 2026-11-15 实际执行记录（IWAC1 + IWAC2）
+
+两台 Linux 机器各一块 RTX 5090（32 GB），conda 环境 `gpr`（Python 3.10，torch 2.11.0+cu128，requirements.txt）。仓库都在 `~/github/shuangquxian`，数据目录按上面第 1 步重建。
+
+- **采用"更干净的做法"**：Round 4 的 `hbatbox_aug_none`、`hbatbox_aug_abs` 和 Round 7 已跑的 36 个 `hbatbox_aug_oracle` 都在 5090 上**从头重跑**，Windows / 5060 Ti 上的旧结果改名为 `runs_cv/ds2/*_win5060ti/`（控制台日志移到 `runs_cv/logs_win5060ti/`）保留。`aggregate_cv.py` 多了三对：旧 none→abs（即 Round 4 原表）、旧 none→新 none、旧 abs→新 abs，后两对量化换卡本身带来的差别。`aug_none` / `aug_abs`（official box 对照）没有重跑，仍是旧机器结果。
+- **两台 5090 的结果逐位一致**：同一配置（`hbatbox_aug_none` f0 seed0）在 IWAC1 和 IWAC2 上各跑一次，`train_log.csv`、`preds_val.json`、`preds_test.json` 的 md5 完全相同，`metrics.json` 只差路径和耗时字段。因此配对的两臂可以分在不同机器上。
+- **分工**：IWAC1 跑 none / abs / oracle、abs_extent / oracle_extent、lam0.1 / 0.3 / 1.5；IWAC2 跑 none_s4 / abs_s4、四个 frac、gate。IWAC2 的结果用 rsync 同步回 IWAC1 后统一 aggregate、提交。
+- **吞吐**：`--jobs 10 --workers 1` 时单个 run 约 75 s（stride 8）、约 160 s（stride 4）、frac50 约 50 s。GPU 利用率 100% 但功耗只有约 325 W / 575 W：模型太小，kernel 很短，多进程只能分时。实测 10 → 16 个进程时单 run 等比变慢、总吞吐不变（0.133 → 0.136 run/s），所以不开 CUDA MPS 的话 10 个进程就是上限。
+
 ## 下一步
 
 | 优先级 | 做什么 | 为了回答什么 | 成本 |
 |---|---|---|---|
-| **1** | **数据集 1 用 Round 4 的方法重跑** | 论文主张能不能保住 | 100 个 run，约 1 小时 |
-| 2 | 把尺寸信息做进网络：用 band 的外接框监督宽高 regression，或把 loss 改成 GIoU | 把 +0.063 变成网络自己的能力 | 改几行代码 + 100 个 run |
-| 3 | 让 band 画得更全：attention head 移到 112×112、监督目标不做二值化 | 逼近 upper bound 0.587 | 每组 100 个 run |
-| 4 | 扫描 attention loss 权重 λ = 0.1 / 0.3 / 1.5 | 排除"attention loss 权重太大"的可能 | 每个 λ 100 个 run |
-| 5 | fusion 方式从 concat 换成 gate | 排除"fusion 方式太弱"的可能 | 100 个 run |
-| 6 | upper bound 诊断：把真实 band 直接送进 fusion | 区分"信息本身没用"和"信息没传到" | 100 个 run |
+| **1** | **数据集 1 用 Round 4 的方法重跑**（等 band 标注补齐，见"Round 7–10 之前"） | 论文主张能不能保住 | 100 个 run，5090 上约 15 分钟 |
+| 2 | 让 band 预测得更准：attention head 加大 receptive field（更深 / dilated）、监督目标不做二值化 | oracle 比 +attention 高 0.013–0.03，band IoU 只有 0.38；这是现有通路里唯一还剩的空间 | 每组 100 个 run |
+| 3 | 把 Round 6 的 post-processing 做成可训练的一步：用 band 的外接框监督 wh head，或改 GIoU loss | 把 +0.11 变成网络自己的能力（Round 8 的两条路都没做到） | 改代码 + 100 个 run |
+| 4 | 决定两次硬件复现怎么写进论文 | 效应量（+0.004 / +0.019）和换卡噪声（+0.013）同量级 | 只需写作 |
 
-先做 1；2、3 可以同时准备。4–6 等前面的结果出来再决定。
+原来的 4–6（λ 扫描、gate、oracle 上限）已在 Round 7–10 完成，结论见上。
 
-**写作**：如果数据集 1 也没有提升，论文主张从"提升 F1"缩小为"attention 可解释、不降低精度、能为 band 级输出提供中间表示"，主表如实报告 +0.004 [−0.021, +0.028]。数据描述里要写清楚：official box 是 scene-level、HBAT box 是 instance-level，以及两者的匹配率；test set 27 张图中有 12 张存在一个框包含多条双曲线的情况。
+**写作**：数据集 2 上严格协议的结果是 ΔF1 = +0.019 [+0.004, +0.035]（5090）/ +0.004 [−0.021, +0.028]（5060 Ti）。论文主张应从"提升 F1 0.06"改为"attention 可解释、不降低精度、提升在 0.02 量级且对硬件敏感"，主表如实报告两次复现；并给出 oracle 上限（+0.032 / +0.043）说明现有 fusion 通路能从 band 里拿到的信息有限，而 Round 6 的 post-processing 说明 band 本身的信息价值（+0.11）。数据描述里要写清楚：official box 是 scene-level、HBAT box 是 instance-level，以及两者的匹配率；test set 27 张图中有 12 张存在一个框包含多条双曲线的情况。
 
 ---
 
@@ -453,8 +497,10 @@ Round 4 起所有正式数字都按这套设置。
 
 | 位置 | 内容 | 能否引用 |
 |---|---|---|
-| `runs_cv/ds2/<exp>/f<fold>_seed<k>/` | Round 4 的 200 个 run 和 Round 7–10 的各实验：`final.pth`、`preds_*.json`、`metrics*.json`、`run_info.json`、`train_log.csv` | ✅ 正式 |
-| `runs_cv/cv_summary.md/.json` | Round 4 汇总 | ✅ 正式 |
+| `runs_cv/ds2/<exp>/f<fold>_seed<k>/` | Round 4（5090 重跑）和 Round 7–10 的 15 个实验 × 50 个 run：`preds_*.json`、`metrics*.json`、`run_info.json`、`train_log.csv`（入库）；`final.pth`、`vis/` 只在跑它的那台机器上（IWAC1：none / abs / oracle / extent / lam0.1 / lam0.3；IWAC2：s4 / frac / gate / lam1.5） | ✅ 正式 |
+| `runs_cv/ds2/*_win5060ti/` | Round 4 的 `hbatbox_aug_none` / `hbatbox_aug_abs` 和 Round 7 前 36 个 oracle run 在 Windows / 5060 Ti 上的原始结果；`aug_none` / `aug_abs` 没有重跑，仍是 5060 Ti 结果 | ✅ 作硬件复现对照 |
+| `runs_cv/cv_summary.md/.json` | Round 4、7–10 全部配对的汇总（含换卡前后三对） | ✅ 正式 |
+| `runs_cv/log_*.txt`、`launch_iwac*_q*.log`、`run_seeds.log`、`logs_win5060ti/` | 每个 run 的控制台日志和调度日志（IWAC2 的部分已同步过来） | — |
 | `runs_cv/refine/` | Round 6：attention map（npz）、修正后的预测、`summary.md`、`vis/` | ✅（仅作 post-processing 证据） |
 | `runs/` | Round 2、3（single fold、初始化未对齐） | ❌ 只作对照 |
 | `runs_legacy_init_1114/` | Round 1 | ❌ 作废 |
@@ -469,10 +515,10 @@ Round 4 起所有正式数字都按这套设置。
 1. 数据集 1 还没用严格协议跑过（最大的空白）。
 2. "不降低检测精度"是一个很弱的主张。
 3. 整体精度低（F1 0.48）：模型从零训练，训练集只有约 91 张图。
-4. λ = 0.7 时 attention loss 是检测 loss 的 2.3 倍，没有扫过其他取值。
-5. fusion 只试了 concat 一种。
+4. ~~λ = 0.7 时 attention loss 是检测 loss 的 2.3 倍，没有扫过其他取值。~~ Round 10 扫了 0.1 / 0.3 / 1.5，都不比 0.7 好。
+5. ~~fusion 只试了 concat 一种。~~ Round 8、10 试了 extent 和 gate，都和 concat 没有区别。新问题：**效应量（+0.004 / +0.019）和换显卡带来的差别（+0.013）同量级**，n = 10 的检验分辨不出 0.02 以下的效应。
 6. 56×56 的 attention map 上 band 只有 2 格宽（Round 5 问题 1）。
 7. validation set 合计只有约 70 个目标，选参数有 overfitting 风险（Round 6 中每个 seed 单独选参比全局统一选参差 0.023）。
 8. 用的是最后一个 epoch 的权重，训练末尾 loss 还在波动。
 9. official box 和 HBAT box 的 granularity 不同，论文里要写清楚。
-10. 本目录还没提交到 git；`runs_cv/` 有 2 GB，提交前要确认 .gitignore。
+10. ~~本目录还没提交到 git。~~ 已提交；`runs_cv/` 只入库轻量文件（.gitignore 排除 `*.pth`、`vis/`、`*.npz`），权重分散在 IWAC1 / IWAC2 两台机器上，Round 6 的 refine 若要重做需在有对应 `final.pth` 的机器上跑。
