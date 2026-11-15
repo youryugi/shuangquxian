@@ -41,7 +41,12 @@ DEFAULT_PAIRS = ["hbatbox_aug_none:hbatbox_aug_abs", "aug_none:aug_abs", "hbatbo
                  # 换机器（Windows / 5060 Ti → Linux / 5090，2026-11-15）：旧结果备份为 *_win5060ti。
                  # 第一对 = 第 4 轮原表；后两对 = 同一配置换卡前后的差别，量化硬件带来的噪声
                  "hbatbox_aug_none_win5060ti:hbatbox_aug_abs_win5060ti",
-                 "hbatbox_aug_none_win5060ti:hbatbox_aug_none", "hbatbox_aug_abs_win5060ti:hbatbox_aug_abs"]
+                 "hbatbox_aug_none_win5060ti:hbatbox_aug_none", "hbatbox_aug_abs_win5060ti:hbatbox_aug_abs",
+                 # 第 12 轮：band → 框尺寸做进推理（infer_bandbox.py）。方法 vs baseline；推理步骤本身的增量；等比放大对照；真实 band 上限
+                 "hbatbox_aug_none:hbatbox_aug_abs_bandbox", "hbatbox_aug_abs:hbatbox_aug_abs_bandbox",
+                 "hbatbox_aug_none:hbatbox_aug_none_scale", "hbatbox_aug_abs:hbatbox_aug_abs_scale",
+                 "hbatbox_aug_none_scale:hbatbox_aug_abs_bandbox", "hbatbox_aug_abs_scale:hbatbox_aug_abs_bandbox",
+                 "hbatbox_aug_abs_bandbox:hbatbox_aug_abs_gtbandbox", "hbatbox_aug_none:hbatbox_aug_oracle_gtbandbox"]
 
 
 def data_dir_of(run_info, fold):
