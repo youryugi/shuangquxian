@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>标注查看器</title>
+<!--
+  标注查看器：双击用浏览器（Edge / Chrome）打开，点「打开文件夹」或把文件夹拖进来。
+  图片和标注只在本地浏览器里读取，不会上传。
+
+  支持的标注格式（按文件名/主干名与图片匹配）：
+    JSON  {图片名: [对象, ...]}
+          - HBAT 双曲线带   x_vertex, y_vertex, slope, span, thickness   （几何同 tools/annotation/hbat.py）
+          - 旧版抛物线带    x_vertex, y_vertex, width, height, thickness （几何同 legacy_bbox_annotator.py）
+          - 矩形框          x1, y1, width, height | x1, y1, x2, y2 | xmin.. | bbox:[x, y, w, h]
+          - 多边形          points / polygon
+    JSON  COCO（images + annotations）
+    TXT   DOTA 旋转框（x1 y1 … x4 y4 类别 难度）、YOLO 框 / YOLO-OBB / YOLO 分割（归一化）
+    XML   Pascal VOC
+  标注来源的查找范围：图片所在文件夹、它的上级和同级文件夹（JSON）；任何主干名与图片相同的 txt/xml 文件夹。
+-->
+<style>
+:root{
+  --bg:#0f1216; --panel:#161a20; --panel2:#1d222a; --line:#2a313b; --text:#e4e8ee;
+  --muted:#8d96a5; --accent:#4ea1ff; --accent2:#2b5d93; --warn:#ffb020;
+  color-scheme: dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:13px/1.45 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:#3d4652}
+button.primary{background:var(--accent2);border-color:var(--accent)}
+button.on{background:var(--accent2);border-color:var(--accent)}
+.muted{color:var(--muted)}
+.app{display:grid;grid-template-rows:44px 1fr;grid-template-columns:290px 1fr 320px;height:100vh}
+.app.grid-mode{grid-template-columns:290px 1fr 0}
+header{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0 8px 0 0;font-weight:600;white-space:nowrap}
+header .sp{flex:1}
+.seg{display:inline-flex}
+.seg button{border-radius:0}
+.seg button:first-child{border-radius:6px 0 0 6px}
+.seg button:last-child{border-radius:0 6px 6px 0;margin-left:-1px}
+#navlbl{min-width:90px;text-align:center;font-variant-numeric:tabular-nums}
+#coord{font-variant-numeric:tabular-nums;min-width:150px;text-align:right}
+aside{background:var(--panel);border-right:1px solid var(--line);overflow:auto;min-height:0}
+aside section{padding:10px 12px;border-bottom:1px solid var(--line)}
+aside h3{font-size:12px;font-weight:600;color:var(--muted);margin:0 0 8px;letter-spacing:.04em}
+#dirs .d{padding:5px 8px;border-radius:6px;cursor:pointer;display:flex;gap:6px;align-items:baseline}
+#dirs .d:hover{background:var(--panel2)}
+#dirs .d.sel{background:var(--accent2)}
+#dirs .d .p{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+#dirs .d .n{color:var(--muted);font-size:12px}
+.src{display:grid;grid-template-columns:auto auto 1fr;gap:2px 7px;align-items:center;padding:6px 4px;border-radius:6px}
+.src:hover{background:var(--panel2)}
+.src .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src .meta{grid-column:3;font-size:12px;color:var(--muted)}
+.src .meta b{color:var(--warn);font-weight:500}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;flex:none}
+.key{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-left:4px}
+.row{display:flex;align-items:center;gap:8px;margin:5px 0}
+.row label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.row input[type=range]{flex:1}
+.row .v{width:36px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.radio{display:flex;gap:0}
+.radio button{flex:1;border-radius:0;padding:3px 6px}
+.radio button:first-child{border-radius:6px 0 0 6px}
+.radio button:last-child{border-radius:0 6px 6px 0}
+.radio button+button{margin-left:-1px}
+input[type=search]{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin-top:6px}
+.help{font-size:12px;color:var(--muted);line-height:1.7}
+.help kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font:11px Consolas,monospace;color:var(--text)}
+main{position:relative;min-width:0;min-height:0;background:#0a0c0f}
+#stage{position:absolute;inset:0;overflow:hidden}
+#cv{display:block;cursor:grab;touch-action:none}
+#cv.drag{cursor:grabbing}
+#grid{position:absolute;inset:0;overflow:auto;padding:12px;display:none;grid-template-columns:repeat(auto-fill,minmax(var(--thumb,220px),1fr));grid-auto-rows:max-content;gap:10px;align-content:start}
+.grid-mode #grid{display:grid}
+.grid-mode #stage{display:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer}
+.card:hover{border-color:var(--accent)}
+.card.cur{outline:2px solid var(--accent)}
+.card canvas{display:block;width:100%;aspect-ratio:1;background:#000}
+.card .cap{padding:4px 7px;font-size:12px;display:flex;gap:6px;align-items:center}
+.card .cap .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .cap .bd{display:inline-flex;align-items:center;gap:3px;color:var(--muted)}
+.card .cap .bd i{width:8px;height:8px;border-radius:2px;display:inline-block}
+#info{background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:10px 12px;min-height:0}
+.grid-mode #info{display:none}
+#info .fname{font-weight:600;word-break:break-all}
+#info .srch{display:flex;align-items:center;gap:6px;margin:12px 0 4px;font-weight:600}
+#info .obj{font-size:12px;padding:4px 6px;border-radius:5px;margin:2px 0;background:var(--panel2);border:1px solid transparent;cursor:default;font-variant-numeric:tabular-nums}
+#info .obj:hover{border-color:var(--accent)}
+#info .obj .t{color:var(--muted)}
+#info .none{font-size:12px;color:var(--muted);padding:2px 6px}
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+#empty .box{border:2px dashed #39424e;border-radius:14px;padding:28px 34px;max-width:560px;color:var(--muted);line-height:1.8;background:rgba(15,18,22,.85)}
+#empty .box b{color:var(--text)}
+body.dragover #empty{display:flex!important}
+body.dragover #empty .box{border-color:var(--accent);color:var(--text)}
+#status{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(10,12,15,.75);padding:2px 8px;border-radius:5px;pointer-events:none}
+#err{color:#ff7a7a}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header>
+    <h1>标注查看器</h1>
+    <button class="primary" id="btnOpen">打开文件夹</button>
+    <input type="file" id="picker" webkitdirectory directory multiple hidden>
+    <div class="seg"><button id="vSingle" class="on" title="单张 (G 切换)">单张</button><button id="vGrid" title="网格 (G 切换)">网格</button></div>
+    <button id="prev" title="上一张 (←)">◀</button><span id="navlbl" class="muted">–</span><button id="next" title="下一张 (→)">▶</button>
+    <span class="sp"></span>
+    <span id="coord" class="muted"></span>
+  </header>
+
+  <aside>
+    <section>
+      <h3>图片文件夹</h3>
+      <div id="dirs"><div class="muted">尚未打开文件夹</div></div>
+    </section>
+    <section>
+      <h3>标注来源 <span class="muted" style="font-weight:400">（数字键开关）</span></h3>
+      <div id="srcs"><div class="muted">—</div></div>
+    </section>
+    <section>
+      <h3>筛选</h3>
+      <div class="radio" id="flt">
+        <button data-f="all" class="on">全部</button><button data-f="ann">有标注</button><button data-f="empty">无标注</button>
+      </div>
+      <input type="search" id="q" placeholder="按文件名搜索…">
+    </section>
+    <section>
+      <h3>显示</h3>
+      <div class="row"><label><input type="checkbox" data-o="show">显示标注</label><span class="key">空格</span></div>
+      <div class="row"><span style="width:56px">填充</span><input type="range" min="0" max="0.8" step="0.05" data-o="fill"><span class="v" data-v="fill"></span></div>
+      <div class="row"><span style="width:56px">线宽</span><input type="range" min="0.5" max="6" step="0.5" data-o="lw"><span class="v" data-v="lw"></span></div>
+      <div class="row"><label><input type="checkbox" data-o="center">带中心线</label><label><input type="checkbox" data-o="apex">顶点</label><label><input type="checkbox" data-o="labels">文字</label></div>
+      <div class="row"><label title="由双曲线带/抛物线带推导的外接矩形，算法同 hbat.py 的 hyperbola_to_bbox"><input type="checkbox" data-o="bbox">带的外接框（虚线）</label><span class="key">B</span></div>
+      <div class="row"><label title="experiments/additional_centernet 与 cross_dataset 下的 centernet_band_attention.py 把 slope/span 换算成 height = slope·span/4 的抛物线带来生成注意力掩膜；勾选后用粉色虚线叠加这条抛物线带，便于和标注工具画的真双曲线带对比。"><input type="checkbox" data-o="train">CenterNet 训练掩膜（粉色虚线）</label><span class="key">T</span></div>
+      <div class="row" id="thumbRow"><span style="width:56px">缩略图</span><input type="range" min="120" max="420" step="20" data-o="thumb"><span class="v" data-v="thumb"></span></div>
+    </section>
+    <section class="help">
+      <kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd> 翻页　<kbd>G</kbd> 单张/网格<br>
+      <kbd>空格</kbd> 显隐标注　<kbd>1</kbd>–<kbd>9</kbd> 开关来源<br>
+      滚轮缩放，拖动平移，<kbd>F</kbd> 或双击 复位<br>
+      右栏悬停某个对象会在图上高亮<br>
+      文件只在本地读取，不会上传
+    </section>
+  </aside>
+
+  <main id="main">
+    <div id="stage"><canvas id="cv"></canvas></div>
+    <div id="grid"></div>
+    <div id="empty"><div class="box">
+      <b>把数据文件夹拖到这里，或点左上角「打开文件夹」。</b><br>
+      可以直接选整个 <code>data/</code>，左栏会列出其中每个图片文件夹。<br>
+      识别的标注：HBAT 双曲线带 / 旧版抛物线带 / 矩形框 JSON、COCO、DOTA 旋转框、YOLO（框 / OBB / 分割）、VOC XML。
+    </div></div>
+    <div id="status"></div>
+  </main>
+
+  <div id="info"><div class="muted">—</div></div>
+</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const IMG_RE = /\.(jpe?g|png|bmp|webp|gif|avif)$/i;
+const NUM_RE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+const PALETTE = ['#3ddc84', '#ffb020', '#36c5f0', '#ff6b9a', '#b38cff', '#f5e663', '#ff7a45', '#7ee0c3', '#9fb4ff'];
+const TRAIN_COLOR = '#ff4fd8';
+const APEX_COLOR = '#ffe14d';
+const TYPE_NAME = { hbat: 'HBAT 双曲线带', parab: '旧版抛物线带', rect: '矩形框', poly: '多边形/旋转框' };
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const SKIP_DIR = /^(\.|node_modules$|__pycache__$)/;
+
+const S = {
+  dirs: new Map(), imageDirs: [], cur: null, list: [], idx: 0,
+  view: 'single', hl: null, vt: null, img: null, imgRec: null,
+  filter: 'all', q: '', opts: loadOpts(), openTok: 0,
+};
+
+function loadOpts() {
+  const d = { show: true, fill: 0.3, lw: 2, center: true, apex: true, labels: true, bbox: false, train: false, thumb: 220 };
+  try { Object.assign(d, JSON.parse(localStorage.getItem('labelViewer.opts') || '{}')); } catch (e) { }
+  return d;
+}
+function saveOpts() { try { localStorage.setItem('labelViewer.opts', JSON.stringify(S.opts)); } catch (e) { } }
+
+// ------------------------------------------------------------------ paths ---
+function normPath(p) { return p.replace(/\\/g, '/').replace(/^\/+/, ''); }
+function parentOf(p) { if (p === '') return null; const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
+function baseName(p) { p = normPath(String(p)); const i = p.lastIndexOf('/'); return i < 0 ? p : p.slice(i + 1); }
+function stemOf(n) { const i = n.lastIndexOf('.'); return i <= 0 ? n : n.slice(0, i); }
+function lastSeg(p) { return p === '' ? '(根目录)' : baseName(p); }
+function relDir(from, to) {
+  if (from === to) return '';
+  if (parentOf(from) === parentOf(to)) return '../' + lastSeg(to) + '/';
+  if (to.startsWith(from + '/')) return to.slice(from.length + 1) + '/';
+  return '/' + to + '/';
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmt(v, d = 1) { return typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(d)) : String(v); }
+function bump(o, k) { o[k] = (o[k] || 0) + 1; }
+
+// ----------------------------------------------------------------- ingest ---
+function ingest(entries) {
+  S.dirs = new Map();
+  for (const { file, path } of entries) {
+    const p = normPath(path);
+    const dir = parentOf(p) ?? '';
+    if (dir.split('/').some(seg => SKIP_DIR.test(seg))) continue;
+    let d = S.dirs.get(dir);
+    if (!d) { d = { path: dir, images: [], txt: [], xml: [], json: [], yaml: [], sources: null }; S.dirs.set(dir, d); }
+    const name = baseName(p), low = name.toLowerCase();
+    const rec = { file, path: p, dir, name, stem: stemOf(name), w: 0, h: 0 };
+    if (IMG_RE.test(low)) d.images.push(rec);
+    else if (low.endsWith('.txt')) d.txt.push(rec);
+    else if (low.endsWith('.xml')) d.xml.push(rec);
+    else if (low.endsWith('.json')) d.json.push(rec);
+    else if (/\.(ya?ml|names)$/.test(low)) d.yaml.push(rec);
+  }
+  S.imageDirs = [...S.dirs.values()].filter(d => d.images.length).sort((a, b) => collator.compare(a.path, b.path));
+  for (const d of S.imageDirs) {
+    d.images.sort((a, b) => collator.compare(a.name, b.name));
+    d.byStem = new Map(d.images.map(r => [r.stem, r]));
+  }
+  $('#empty').style.display = S.imageDirs.length ? 'none' : 'flex';
+  renderDirList();
+  if (S.imageDirs.length) openDir(S.imageDirs[0]);
+  else setStatus('所选文件夹里没有找到图片');
+}
+
+async function entriesFromDrop(dt) {
+  const roots = [...dt.items].map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+  const out = [];
+  async function walk(entry) {
+    if (entry.isFile) {
+      try { out.push({ file: await new Promise((res, rej) => entry.file(res, rej)), path: entry.fullPath }); } catch (e) { }
+    } else if (entry.isDirectory) {
+      if (SKIP_DIR.test(entry.name)) return;
+      const rd = entry.createReader();
+      for (;;) {
+        const batch = await new Promise((res, rej) => rd.readEntries(res, rej));
+        if (!batch.length) break;
+        await Promise.all(batch.map(walk));
+      }
+    }
+  }
+  for (const r of roots) await walk(r);
+  return out;
+}
+
+// --------------------------------------------------------- annotation parse ---
+function normObj(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const n = k => typeof o[k] === 'number' && isFinite(o[k]);
+  const label = String(o.label ?? o.class ?? o.name ?? o.category ?? o.cls ?? '');
+  const conf = n('score') ? o.score : n('conf') ? o.conf : n('confidence') ? o.confidence : undefined;
+  const base = { label, conf, raw: o };
+  if (n('x_vertex') && n('y_vertex')) {
+    const t = n('thickness') ? o.thickness : 12;
+    const xv = o.x_vertex, yv = o.y_vertex;
+    if (n('slope')) return { ...base, type: 'hbat', xv, yv, slope: o.slope, span: n('span') ? o.span : n('width') ? o.width : 100, t };
+    if (n('a') && n('b') && o.b) return { ...base, type: 'hbat', xv, yv, slope: o.a / o.b, span: n('span') ? o.span : n('width') ? o.width : 100, t };
+    if (n('height')) return { ...base, type: 'parab', xv, yv, w: n('width') ? o.width : n('span') ? o.span : 100, h: o.height, t };
+    return { ...base, type: 'hbat', xv, yv, slope: 1, span: n('span') ? o.span : 100, t };
+  }
+  if (n('x1') && n('y1') && n('x2') && n('y2')) return { ...base, type: 'rect', x: o.x1, y: o.y1, w: o.x2 - o.x1, h: o.y2 - o.y1 };
+  if (n('x1') && n('y1') && n('width') && n('height')) return { ...base, type: 'rect', x: o.x1, y: o.y1, w: o.width, h: o.height };
+  if (n('xmin') && n('ymin') && n('xmax') && n('ymax')) return { ...base, type: 'rect', x: o.xmin, y: o.ymin, w: o.xmax - o.xmin, h: o.ymax - o.ymin };
+  if (n('x') && n('y') && n('width') && n('height')) return { ...base, type: 'rect', x: o.x, y: o.y, w: o.width, h: o.height };
+  if (n('x') && n('y') && n('w') && n('h')) return { ...base, type: 'rect', x: o.x, y: o.y, w: o.w, h: o.h };
+  if (Array.isArray(o.bbox) && o.bbox.length === 4 && o.bbox.every(v => typeof v === 'number'))
+    return { ...base, type: 'rect', x: o.bbox[0], y: o.bbox[1], w: o.bbox[2], h: o.bbox[3] };
+  const pts = toPts(o.points ?? o.polygon ?? o.segmentation);
+  if (pts) return { ...base, type: 'poly', pts };
+  return null;
+}
+function toPts(a) {
+  if (!Array.isArray(a) || !a.length) return null;
+  if (Array.isArray(a[0]) && a[0].length === 2 && typeof a[0][0] === 'number') return a.length >= 2 ? a.map(p => [p[0], p[1]]) : null;
+  if (Array.isArray(a[0]) && typeof a[0][0] === 'number') a = a[0];          // COCO 多段分割只取第一段
+  if (typeof a[0] === 'number' && a.length >= 4 && a.length % 2 === 0) { const r = []; for (let i = 0; i < a.length; i += 2) r.push([a[i], a[i + 1]]); return r; }
+  return null;
+}
+
+function parseJsonAnno(j) {
+  if (!j || typeof j !== 'object') return null;
+  const map = new Map(), types = {};
+  let nObj = 0, nBad = 0, nKeys = 0;
+  if (Array.isArray(j.images) && Array.isArray(j.annotations)) {               // COCO
+    const cats = new Map((j.categories || []).map(c => [c.id, c.name]));
+    const idName = new Map();
+    for (const im of j.images) { const nm = baseName(im.file_name ?? im.id); idName.set(im.id, nm); map.set(nm, []); nKeys++; }
+    for (const a of j.annotations) {
+      const arr = map.get(idName.get(a.image_id)); if (!arr) continue;
+      const lab = cats.get(a.category_id) ?? String(a.category_id ?? '');
+      const o = normObj({ bbox: a.bbox, label: lab, score: a.score });
+      const segPts = Array.isArray(a.segmentation) ? toPts(a.segmentation) : null;
+      if (segPts) { arr.push({ type: 'poly', pts: segPts, label: lab, raw: a }); bump(types, 'poly'); nObj++; }
+      else if (o) { o.raw = a; arr.push(o); bump(types, o.type); nObj++; }
+    }
+    return { map, nObj, nKeys, types, coco: true };
+  }
+  if (Array.isArray(j)) return null;
+  let anyArr = false;
+  for (const [k, v] of Object.entries(j)) {
+    const arr = Array.isArray(v) ? v : (v && Array.isArray(v.objects)) ? v.objects : (v && Array.isArray(v.annotations)) ? v.annotations : null;
+    if (!arr) continue;
+    anyArr = true; nKeys++;
+    const objs = [];
+    for (const o of arr) { const r = normObj(o); if (r) { objs.push(r); bump(types, r.type); } else nBad++; }
+    map.set(baseName(k), objs);
+    nObj += objs.length;
+  }
+  if (!anyArr || (nObj === 0 && nBad > 0)) return null;
+  return { map, nObj, nKeys, types };
+}
+
+function parseTxt(text, names, fc) {
+  const out = [];
+  const cls = c => (names && names[c] != null) ? names[c] : String(c);
+  for (const line of text.split(/\r?\n/)) {
+    const raw = line.trim();
+    const tk = raw.split(/[\s,]+/).filter(Boolean);
+    if (tk.length < 5) continue;
+    const isN = tk.map(s => NUM_RE.test(s));
+    if (tk.length >= 9 && isN.slice(0, 8).every(Boolean) && !isN[8]) {     // DOTA
+      const v = tk.slice(0, 8).map(Number);
+      out.push({ type: 'poly', pts: [[v[0], v[1]], [v[2], v[3]], [v[4], v[5]], [v[6], v[7]]], label: tk[8], extra: tk[9] !== undefined ? 'difficult=' + tk[9] : '', raw });
+      bump(fc, 'DOTA 旋转框'); continue;
+    }
+    if (!isN.every(Boolean)) continue;
+    const v = tk.map(Number);
+    const isNorm = a => a.every(x => Math.abs(x) <= 1.5);
+    if (tk.length === 5 || tk.length === 6) {
+      const [c, cx, cy, w, h] = v;
+      out.push({ type: 'rect', x: cx - w / 2, y: cy - h / 2, w, h, norm: isNorm([cx, cy, w, h]), label: cls(c), conf: tk.length === 6 ? v[5] : undefined, raw });
+      bump(fc, tk.length === 6 ? 'YOLO 框(含置信度)' : 'YOLO 框');
+    } else if (tk.length === 8) {
+      const pts = [[v[0], v[1]], [v[2], v[3]], [v[4], v[5]], [v[6], v[7]]];
+      out.push({ type: 'poly', pts, norm: isNorm(v), label: '', raw }); bump(fc, '四点框(无类别)');
+    } else if ((tk.length - 1) % 2 === 0 && tk.length >= 7) {
+      const pts = []; for (let i = 1; i < v.length; i += 2) pts.push([v[i], v[i + 1]]);
+      out.push({ type: 'poly', pts, norm: isNorm(v.slice(1)), label: cls(v[0]), raw }); bump(fc, tk.length === 9 ? 'YOLO-OBB' : 'YOLO 分割');
+    }
+  }
+  return out;
+}
+
+function parseVoc(text, fc) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const out = [];
+  const g = (el, t) => { const e = el.getElementsByTagName(t)[0]; return e ? e.textContent.trim() : null; };
+  for (const ob of doc.getElementsByTagName('object')) {
+    const label = g(ob, 'name') || '';
+    const bb = ob.getElementsByTagName('bndbox')[0];
+    if (bb) {
+      const x1 = +g(bb, 'xmin'), y1 = +g(bb, 'ymin'), x2 = +g(bb, 'xmax'), y2 = +g(bb, 'ymax');
+      out.push({ type: 'rect', x: x1, y: y1, w: x2 - x1, h: y2 - y1, label, raw: `${x1} ${y1} ${x2} ${y2}` }); bump(fc, 'VOC 框'); continue;
+    }
+    const rb = ob.getElementsByTagName('robndbox')[0];
+    if (rb) {
+      const cx = +g(rb, 'cx'), cy = +g(rb, 'cy'), w = +g(rb, 'w'), h = +g(rb, 'h'), a = +g(rb, 'angle');
+      const c = Math.cos(a), s = Math.sin(a);
+      const pts = [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map(([x, y]) => [cx + x * c - y * s, cy + x * s + y * c]);
+      out.push({ type: 'poly', pts, label, raw: `cx=${cx} cy=${cy} w=${w} h=${h} angle=${a}` }); bump(fc, 'VOC 旋转框');
+    }
+  }
+  return out;
+}
+
+function parseYamlNames(t) {
+  const unq = s => s.trim().replace(/^['"]|['"]$/g, '');
+  let m = t.match(/^names\s*:\s*\[([\s\S]*?)\]/m);
+  if (m) return m[1].split(',').map(unq).filter(Boolean);
+  m = t.match(/^names\s*:[ \t]*\r?\n((?:[ \t]*(?:-|\d+\s*:).*(?:\r?\n|$))+)/m);
+  if (!m) return null;
+  const out = [];
+  for (const line of m[1].split(/\r?\n/)) {
+    let mm = line.match(/^\s*(\d+)\s*:\s*(.+)$/); if (mm) { out[+mm[1]] = unq(mm[2]); continue; }
+    mm = line.match(/^\s*-\s*(.+)$/); if (mm) out.push(unq(mm[1]));
+  }
+  return out.length ? out : null;
+}
+async function findClassNames(d) {
+  let p = d.path;
+  for (let k = 0; k < 3 && p !== null; k++, p = parentOf(p)) {
+    const dd = S.dirs.get(p); if (!dd) continue;
+    const cls = dd.txt.find(r => /^(classes|obj\.names|class_names)/i.test(r.name)) || dd.yaml.find(r => /\.names$/i.test(r.name));
+    if (cls) return (await cls.file.text()).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    for (const y of dd.yaml.filter(r => /\.ya?ml$/i.test(r.name))) {
+      const nm = parseYamlNames(await y.file.text()); if (nm) return nm;
+    }
+  }
+  return null;
+}
+
+// ----------------------------------------------------- source discovery ---
+async function resolveSources(I) {
+  const srcs = [];
+  const par = parentOf(I.path);
+  const isLabelName = p => /^(labels?|labeltxt|annotations?|anns?|xmls?|gt|txt)([_\-.].*)?$/i.test(lastSeg(p));
+
+  // JSON：本文件夹、上级文件夹、无图片的同级文件夹
+  const jsonCands = I.json.map(r => ({ r, d: I }));
+  for (const d of S.dirs.values()) {
+    if (d === I || !d.json.length) continue;
+    if (d.path === par || (par !== null && parentOf(d.path) === par && !d.images.length)) for (const r of d.json) jsonCands.push({ r, d });
+  }
+  for (const { r, d } of jsonCands) {
+    if (r.file.size > 80e6) continue;
+    let p = null;
+    try { p = parseJsonAnno(JSON.parse(await r.file.text())); } catch (e) { p = null; }
+    if (!p) continue;
+    const src = {
+      kind: 'json', path: r.path, short: relDir(I.path, d.path) + r.name, local: d === I, sib: false,
+      byName: p.map, byStem: new Map([...p.map].map(([k, v]) => [stemOf(k), v])),
+      nObj: p.nObj, nKeys: p.nKeys,
+      fmt: p.coco ? 'COCO' : (Object.keys(p.types).map(t => TYPE_NAME[t]).join(' + ') || '（空标注）'),
+    };
+    coverage(src, I);
+    if (src.local || src.match > 0) srcs.push(src);
+  }
+
+  // TXT / XML 文件夹：凡是有文件主干名与图片相同的都算
+  for (const d of S.dirs.values()) {
+    for (const kind of ['txt', 'xml']) {
+      const hits = d[kind].filter(r => I.byStem.has(r.stem));
+      if (!hits.length) continue;
+      const names = kind === 'txt' ? await findClassNames(d) : null;
+      const byStem = new Map(), fc = {};
+      let nObj = 0;
+      await Promise.all(hits.map(async r => {
+        let objs = [];
+        try { const t = await r.file.text(); objs = kind === 'txt' ? parseTxt(t, names, fc) : parseVoc(t, fc); } catch (e) { }
+        byStem.set(r.stem, objs); nObj += objs.length;
+      }));
+      if (nObj === 0 && !Object.keys(fc).length && d !== I) continue;      // 主干名撞上了但内容不是标注
+      const src = {
+        kind, path: d.path, short: relDir(I.path, d.path) + '*.' + kind, local: d === I,
+        sib: d !== I && par !== null && parentOf(d.path) === par && isLabelName(d.path),
+        byName: new Map(), byStem, nObj, nKeys: d[kind].length,
+        fmt: Object.keys(fc).join(' + ') || '（空标注）',
+      };
+      coverage(src, I);
+      srcs.push(src);
+    }
+  }
+
+  // 默认勾选：本文件夹里有标注的来源 > 同级 labels*/labelTxt 文件夹 > 覆盖率 ≥ 50% 的来源
+  const tier1 = srcs.filter(s => s.local && s.nObj > 0);
+  const tier2 = srcs.filter(s => s.sib && s.nObj > 0);
+  const on = tier1.length ? tier1 : tier2.length ? tier2 : srcs.filter(s => s.match >= 0.5 * I.images.length && s.nObj > 0);
+  srcs.sort((a, b) => (b.local - a.local) || (a.kind === 'json' ? -1 : 1) - (b.kind === 'json' ? -1 : 1) || collator.compare(a.short, b.short));
+  srcs.forEach((s, i) => { s.id = i; s.color = PALETTE[i % PALETTE.length]; s.enabled = on.includes(s); });
+  return srcs;
+}
+function coverage(src, I) {
+  let match = 0, ann = 0;
+  for (const r of I.images) { const o = objsOf(src, r); if (o) { match++; if (o.length) ann++; } }
+  src.match = match; src.ann = ann;
+  if (src.kind === 'json') { let un = 0; for (const k of src.byName.keys()) if (!I.byStem.has(stemOf(k))) un++; src.unmatched = un; }
+}
+function objsOf(src, rec) { return src.byName.get(rec.name) ?? src.byStem.get(rec.stem); }
+function enabledSrcs() { return S.cur && S.cur.sources ? S.cur.sources.filter(s => s.enabled) : []; }
+function countObjs(rec) { let n = 0; for (const s of enabledSrcs()) n += (objsOf(s, rec) || []).length; return n; }
+
+// --------------------------------------------------------------- geometry ---
+function hbatCurve(xv, yv, slope, span, n = 160) {                     // 同 hbat.py hyperbola_band_polygon
+  const a = Math.max(1, Math.abs(yv)), b = a / Math.max(1e-3, slope);
+  const W = Math.max(2, span), hw = W / 2, out = [];
+  for (let i = 0; i <= n; i++) { const x = xv - hw + W * i / n; out.push([x, yv + a * (Math.sqrt(1 + ((x - xv) / b) ** 2) - 1)]); }
+  return out;
+}
+function parabCurve(xv, yv, w, h, n = 160) {                           // 同 legacy_bbox_annotator.py
+  const W = Math.max(2, w), H = Math.max(1, h), hw = W / 2, out = [];
+  for (let i = 0; i <= n; i++) { const x = xv - hw + W * i / n, dx = (x - xv) / hw; out.push([x, yv + H * dx * dx]); }
+  return out;
+}
+function curveOf(o) {
+  if (!o._c) o._c = o.type === 'hbat' ? hbatCurve(o.xv, o.yv, o.slope, o.span) : parabCurve(o.xv, o.yv, o.w, o.h);
+  return o._c;
+}
+function trainCurveOf(o) {                                             // centernet_band_attention.py：height = slope * (span/2) / 2
+  if (!o._tc) { const hw = Math.max(1, o.span / 2); o._tc = parabCurve(o.xv, o.yv, o.span, o.slope * hw / 2); }
+  return o._tc;
+}
+function band(curve, t) {
+  t = Math.max(1, t);
+  return curve.map(([x, y]) => [x, y - t / 2]).concat(curve.map(([x, y]) => [x, y + t / 2]).reverse());
+}
+function bandBox(o) {                                                  // 同 hbat.py hyperbola_to_bbox
+  if (o.type === 'hbat') {
+    const hw = o.span / 2, a = Math.max(1, Math.abs(o.yv)), b = a / Math.max(1e-3, o.slope);
+    const yEdge = o.yv + a * (Math.sqrt(1 + (hw / b) ** 2) - 1);
+    return { x: o.xv - hw, y: o.yv - o.t / 2, w: o.span, h: (yEdge - o.yv) + o.t };
+  }
+  return { x: o.xv - o.w / 2, y: o.yv - o.t / 2, w: o.w, h: o.h + o.t };
+}
+function px(o, iw, ih) {                                               // 归一化坐标 → 像素
+  if (!o.norm) return o;
+  if (o.type === 'rect') return { ...o, x: o.x * iw, y: o.y * ih, w: o.w * iw, h: o.h * ih };
+  return { ...o, pts: o.pts.map(([x, y]) => [x * iw, y * ih]) };
+}
+function boxOfPts(p) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of p) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+// ---------------------------------------------------------------- drawing ---
+function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; }
+function path(ctx, pts, close = true) {
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  if (close) ctx.closePath();
+}
+// ctx 已变换到图像像素坐标；k = 每个图像像素对应的屏幕 CSS 像素
+function drawOverlays(ctx, rec, k, iw, ih, fontPx, hl) {
+  const O = S.opts;
+  if (!O.show) return;
+  const lw = O.lw / k;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  for (const src of enabledSrcs()) {
+    const objs = objsOf(src, rec) || [];
+    objs.forEach((o0, i) => {
+      const o = px(o0, iw, ih), c = src.color;
+      const isHl = hl && hl.s === src.id && hl.i === i;
+      const m = isHl ? 2 : 1;
+      let box;
+      if (o.type === 'hbat' || o.type === 'parab') {
+        const cv = curveOf(o0), bd = band(cv, o.t);
+        if (O.fill > 0) { ctx.fillStyle = rgba(c, O.fill); path(ctx, bd); ctx.fill(); }
+        ctx.strokeStyle = rgba(c, 0.95); ctx.lineWidth = lw * 0.6 * m; path(ctx, bd); ctx.stroke();
+        if (O.center) { ctx.strokeStyle = c; ctx.lineWidth = lw * m; path(ctx, cv, false); ctx.stroke(); }
+        box = bandBox(o);
+        if (O.bbox) {
+          ctx.setLineDash([6 / k, 4 / k]); ctx.strokeStyle = c; ctx.lineWidth = lw * 0.8 * m;
+          ctx.strokeRect(box.x, box.y, box.w, box.h); ctx.setLineDash([]);
+        }
+        if (O.train && o.type === 'hbat') {
+          const tc = trainCurveOf(o0);
+          ctx.setLineDash([5 / k, 4 / k]); ctx.strokeStyle = TRAIN_COLOR; ctx.lineWidth = lw * 0.8;
+          path(ctx, band(tc, o.t)); ctx.stroke(); path(ctx, tc, false); ctx.stroke(); ctx.setLineDash([]);
+        }
+        if (O.apex) {
+          ctx.beginPath(); ctx.arc(o.xv, o.yv, (isHl ? 5 : 3.5) / k, 0, Math.PI * 2);
+          ctx.fillStyle = APEX_COLOR; ctx.fill(); ctx.lineWidth = 1 / k; ctx.strokeStyle = '#000'; ctx.stroke();
+        }
+      } else if (o.type === 'rect') {
+        box = o;
+        if (O.fill > 0) { ctx.fillStyle = rgba(c, O.fill * 0.5); ctx.fillRect(o.x, o.y, o.w, o.h); }
+        ctx.strokeStyle = c; ctx.lineWidth = lw * m; ctx.strokeRect(o.x, o.y, o.w, o.h);
+      } else if (o.type === 'poly') {
+        box = boxOfPts(o.pts);
+        if (O.fill > 0) { ctx.fillStyle = rgba(c, O.fill * 0.5); path(ctx, o.pts); ctx.fill(); }
+        ctx.strokeStyle = c; ctx.lineWidth = lw * m; path(ctx, o.pts); ctx.stroke();
+      }
+      if (isHl && box) {
+        ctx.setLineDash([3 / k, 3 / k]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1 / k;
+        ctx.strokeRect(box.x - 3 / k, box.y - 3 / k, box.w + 6 / k, box.h + 6 / k); ctx.setLineDash([]);
+      }
+      if (O.labels && box && fontPx) {
+        const txt = `${i + 1}${o.label ? ' ' + o.label : ''}${o.conf != null ? ' ' + o.conf.toFixed(2) : ''}`;
+        const fp = fontPx / k;
+        ctx.font = `${fp}px "Segoe UI","Microsoft YaHei",sans-serif`;
+        const tw = ctx.measureText(txt).width, pad = 3 / k;
+        let tx = box.x, ty = box.y - fp - 2 * pad;
+        if (ty < 0) ty = box.y;
+        ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(tx, ty, tw + 2 * pad, fp + 2 * pad);
+        ctx.fillStyle = c; ctx.textBaseline = 'top'; ctx.fillText(txt, tx + pad, ty + pad * 1.2);
+      }
+    });
+  }
+}
+
+// ----------------------------------------------------------- image cache ---
+function loadImg(rec) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(rec.file), im = new Image();
+    im.onload = () => { URL.revokeObjectURL(url); rec.w = im.naturalWidth; rec.h = im.naturalHeight; res(im); };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('浏览器无法解码这张图片')); };
+    im.src = url;
+  });
+}
+const fullCache = new Map();
+function getFull(rec) {
+  let p = fullCache.get(rec.path);
+  if (p) { fullCache.delete(rec.path); fullCache.set(rec.path, p); return p; }
+  p = loadImg(rec); fullCache.set(rec.path, p); p.catch(() => fullCache.delete(rec.path));
+  while (fullCache.size > 16) fullCache.delete(fullCache.keys().next().value);
+  return p;
+}
+const thumbCache = new Map();
+async function getThumb(rec, size) {
+  const dpr = devicePixelRatio || 1, key = rec.path + '|' + size;
+  let t = thumbCache.get(key);
+  if (t) { thumbCache.delete(key); thumbCache.set(key, t); return t; }
+  const im = await loadImg(rec);
+  const sc = Math.min(1, size * dpr / Math.max(im.naturalWidth, im.naturalHeight));
+  let bmp = im;
+  try { bmp = await createImageBitmap(im, { resizeWidth: Math.max(1, Math.round(im.naturalWidth * sc)), resizeHeight: Math.max(1, Math.round(im.naturalHeight * sc)), resizeQuality: 'medium' }); } catch (e) { }
+  t = { bmp, w: im.naturalWidth, h: im.naturalHeight };
+  thumbCache.set(key, t);
+  while (thumbCache.size > 600) { const k0 = thumbCache.keys().next().value; const v = thumbCache.get(k0); if (v.bmp.close) v.bmp.close(); thumbCache.delete(k0); }
+  return t;
+}
+
+// ----------------------------------------------------------- single view ---
+const cv = $('#cv'), ctx = cv.getContext('2d');
+function stageSize() { const r = $('#stage').getBoundingClientRect(); return { w: Math.max(1, r.width), h: Math.max(1, r.height) }; }
+function sizeCanvas() {
+  const { w, h } = stageSize(), dpr = devicePixelRatio || 1;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+}
+function fitView() {
+  if (!S.img) return;
+  const { w, h } = stageSize(), iw = S.img.naturalWidth, ih = S.img.naturalHeight;
+  const s = Math.min(w / iw, h / ih) * 0.97;
+  S.vt = { s, ox: (w - iw * s) / 2, oy: (h - ih * s) / 2, iw, ih };
+}
+function draw() {
+  const dpr = devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!S.img || !S.vt) return;
+  const { s, ox, oy } = S.vt;
+  ctx.setTransform(s * dpr, 0, 0, s * dpr, ox * dpr, oy * dpr);
+  ctx.imageSmoothingEnabled = s < 2.5;
+  ctx.drawImage(S.img, 0, 0);
+  drawOverlays(ctx, S.imgRec, s, S.img.naturalWidth, S.img.naturalHeight, 12, S.hl);
+}
+let showTok = 0;
+async function showCurrent(reset) {
+  const rec = S.list[S.idx];
+  updateNav();
+  renderInfo(rec);
+  const tok = ++showTok;
+  if (!rec) { S.img = null; S.imgRec = null; draw(); return; }
+  let im;
+  try { im = await getFull(rec); }
+  catch (e) { if (tok === showTok) { S.img = null; draw(); setStatus(`<span id="err">${esc(rec.name)}：${esc(e.message)}</span>`); } return; }
+  if (tok !== showTok) return;
+  const sameSize = S.vt && S.vt.iw === im.naturalWidth && S.vt.ih === im.naturalHeight;
+  S.img = im; S.imgRec = rec;
+  if (reset || !sameSize) fitView();
+  draw();
+  renderInfo(rec);
+  zoomStatus();
+  for (const d of [1, -1, 2]) { const r = S.list[S.idx + d]; if (r) getFull(r).catch(() => { }); }
+}
+function go(d) {
+  if (!S.list.length) return;
+  S.idx = Math.max(0, Math.min(S.list.length - 1, S.idx + d));
+  S.hl = null;
+  if (S.view === 'grid') markCur(true); else showCurrent(false);
+  updateNav();
+}
+function updateNav() { $('#navlbl').textContent = S.list.length ? `${S.idx + 1} / ${S.list.length}` : '0 / 0'; }
+function zoomStatus() {
+  const zoom = S.view === 'single' && S.vt && S.img ? ` · 缩放 ${Math.round(S.vt.s * 100)}%` : '';
+  setStatus((S.summary || '') + zoom);
+}
+
+// pan / zoom
+let drag = null;
+cv.addEventListener('pointerdown', e => { if (!S.vt) return; drag = { x: e.clientX, y: e.clientY, ox: S.vt.ox, oy: S.vt.oy }; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
+cv.addEventListener('pointermove', e => {
+  if (!S.vt) return;
+  if (drag) { S.vt.ox = drag.ox + e.clientX - drag.x; S.vt.oy = drag.oy + e.clientY - drag.y; draw(); }
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX - r.left - S.vt.ox) / S.vt.s, y = (e.clientY - r.top - S.vt.oy) / S.vt.s;
+  $('#coord').textContent = (x >= 0 && y >= 0 && x <= S.vt.iw && y <= S.vt.ih) ? `x ${x.toFixed(1)}  y ${y.toFixed(1)}  (${S.vt.iw}×${S.vt.ih})` : `${S.vt.iw}×${S.vt.ih}`;
+});
+const endDrag = () => { drag = null; cv.classList.remove('drag'); };
+cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('wheel', e => {
+  if (!S.vt) return;
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const f = Math.exp(-e.deltaY * 0.0015), s = Math.max(0.05, Math.min(64, S.vt.s * f)), ff = s / S.vt.s;
+  S.vt.ox = mx - (mx - S.vt.ox) * ff; S.vt.oy = my - (my - S.vt.oy) * ff; S.vt.s = s;
+  draw(); zoomStatus();
+}, { passive: false });
+cv.addEventListener('dblclick', () => { fitView(); draw(); zoomStatus(); });
+new ResizeObserver(() => {
+  const r = $('#stage').getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return;                   // 网格模式下画布被隐藏
+  sizeCanvas();
+  if (S.img) { fitView(); draw(); zoomStatus(); }
+}).observe($('#stage'));
+
+// -------------------------------------------------------------- grid view ---
+const grid = $('#grid'), visible = new Set();
+const io = new IntersectionObserver(ents => {
+  for (const e of ents) { if (e.isIntersecting) { visible.add(e.target); renderCard(e.target); } else visible.delete(e.target); }
+}, { root: grid, rootMargin: '400px' });
+function buildGrid() {
+  io.disconnect(); visible.clear();
+  grid.innerHTML = '';
+  grid.style.setProperty('--thumb', S.opts.thumb + 'px');
+  const frag = document.createDocumentFragment();
+  S.list.forEach((rec, i) => {
+    const card = document.createElement('div');
+    card.className = 'card'; card.dataset.i = i; card.title = rec.path;
+    card.innerHTML = `<canvas></canvas><div class="cap"><span class="nm">${esc(rec.name)}</span><span class="bds"></span></div>`;
+    card.addEventListener('click', () => { S.idx = i; setView('single'); });
+    frag.appendChild(card);
+  });
+  grid.appendChild(frag);
+  for (const c of grid.children) io.observe(c);
+  markCur(true);
+}
+function badges(rec) {
+  return enabledSrcs().map(s => { const o = objsOf(s, rec); return `<span class="bd" title="${esc(s.short)}"><i style="background:${s.color}"></i>${o ? o.length : '–'}</span>`; }).join('');
+}
+async function renderCard(card) {
+  const rec = S.list[+card.dataset.i]; if (!rec) return;
+  card.querySelector('.bds').innerHTML = badges(rec);
+  const c = card.querySelector('canvas'), cx = c.getContext('2d'), dpr = devicePixelRatio || 1;
+  const size = card.clientWidth || S.opts.thumb;
+  const tok = card._tok = (card._tok || 0) + 1;
+  let t;
+  try { t = await getThumb(rec, Math.round(size)); } catch (e) { return; }
+  if (card._tok !== tok) return;
+  c.width = Math.round(size * dpr); c.height = Math.round(size * dpr);
+  const s = Math.min(size / t.w, size / t.h), ox = (size - t.w * s) / 2, oy = (size - t.h * s) / 2;
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0); cx.clearRect(0, 0, size, size);
+  cx.drawImage(t.bmp, ox, oy, t.w * s, t.h * s);
+  cx.setTransform(s * dpr, 0, 0, s * dpr, ox * dpr, oy * dpr);
+  drawOverlays(cx, rec, s, t.w, t.h, size >= 200 ? 10 : 0, null);
+}
+function redrawCards() { for (const c of visible) renderCard(c); }
+function markCur(scroll) {
+  for (const c of grid.querySelectorAll('.card.cur')) c.classList.remove('cur');
+  const c = grid.children[S.idx];
+  if (c) { c.classList.add('cur'); if (scroll) c.scrollIntoView({ block: 'nearest' }); }
+}
+let thumbTimer = 0;
+function onThumbSize() {
+  grid.style.setProperty('--thumb', S.opts.thumb + 'px');
+  clearTimeout(thumbTimer); thumbTimer = setTimeout(redrawCards, 120);
+}
+
+// --------------------------------------------------------------- panels ---
+function renderDirList() {
+  const el = $('#dirs');
+  if (!S.imageDirs.length) { el.innerHTML = '<div class="muted">没有图片文件夹</div>'; return; }
+  el.innerHTML = S.imageDirs.map((d, i) => `<div class="d${d === S.cur ? ' sel' : ''}" data-i="${i}" title="${esc(d.path || '(根目录)')}"><span class="p">&lrm;${esc(d.path || '(根目录)')}&lrm;</span><span class="n">${d.images.length}</span></div>`).join('');
+  for (const n of el.children) n.addEventListener('click', () => openDir(S.imageDirs[+n.dataset.i]));
+}
+function renderSources() {
+  const el = $('#srcs'), I = S.cur;
+  if (!I.sources.length) { el.innerHTML = '<div class="muted">这个文件夹没有找到可识别的标注</div>'; return; }
+  el.innerHTML = I.sources.map((s, i) => {
+    const warn = [];
+    if (s.unmatched) warn.push(`<b>${s.unmatched} 个键无对应图片</b>`);
+    const miss = I.images.length - s.match;
+    if (miss && s.match) warn.push(`<b>${miss} 张图无条目</b>`);
+    return `<label class="src" title="${esc(s.path)}">
+      <input type="checkbox" data-s="${i}" ${s.enabled ? 'checked' : ''}><i class="sw" style="background:${s.color}"></i>
+      <span class="nm">${esc(s.short)}${i < 9 ? `<span class="key">${i + 1}</span>` : ''}</span>
+      <span class="meta">${esc(s.fmt)} · ${s.nObj} 个对象<br>覆盖 ${s.match}/${I.images.length} 张，其中有标注 ${s.ann} 张${warn.length ? '<br>' + warn.join('，') : ''}</span>
+    </label>`;
+  }).join('');
+  for (const cb of el.querySelectorAll('input')) cb.addEventListener('change', () => { I.sources[+cb.dataset.s].enabled = cb.checked; onSourcesChanged(); });
+}
+function onSourcesChanged() {
+  renderSources();
+  if (S.filter !== 'all') rebuildList(S.list[S.idx]);
+  else { refreshView(); updateSummary(); }
+}
+function refreshView() {
+  if (S.view === 'grid') redrawCards(); else { draw(); renderInfo(S.list[S.idx]); }
+}
+function describe(o, i, src) {
+  const L = `<b>${i + 1}</b> ${esc(o.label || '')}${o.conf != null ? ' <span class="t">conf</span> ' + o.conf.toFixed(3) : ''}`;
+  if (o.type === 'hbat') {
+    const b = bandBox(o);
+    return `${L} <span class="t">双曲线带</span><br><span class="t">顶点</span> (${fmt(o.xv, 2)}, ${fmt(o.yv, 2)}) <span class="t">slope</span> ${fmt(o.slope, 2)} <span class="t">span</span> ${fmt(o.span)} <span class="t">厚</span> ${fmt(o.t)}<br><span class="t">外接框</span> x1 ${fmt(b.x)} y1 ${fmt(b.y)} w ${fmt(b.w)} h ${fmt(b.h)}`;
+  }
+  if (o.type === 'parab') {
+    return `${L} <span class="t">抛物线带</span><br><span class="t">顶点</span> (${fmt(o.xv, 2)}, ${fmt(o.yv, 2)}) <span class="t">width</span> ${fmt(o.w)} <span class="t">height</span> ${fmt(o.h)} <span class="t">厚</span> ${fmt(o.t)}`;
+  }
+  if (o.type === 'rect') {
+    const n = o.norm ? ' <span class="t">(归一化)</span>' : '';
+    return `${L} <span class="t">矩形框</span>${n}<br><span class="t">x1</span> ${fmt(o.x, 2)} <span class="t">y1</span> ${fmt(o.y, 2)} <span class="t">w</span> ${fmt(o.w, 2)} <span class="t">h</span> ${fmt(o.h, 2)}`;
+  }
+  const n = o.norm ? ' <span class="t">(归一化)</span>' : '';
+  return `${L} <span class="t">${o.pts.length} 点多边形</span>${n}${o.extra ? ' <span class="t">' + esc(o.extra) + '</span>' : ''}<br>${o.pts.map(([x, y]) => `(${fmt(x)}, ${fmt(y)})`).join(' ')}`;
+}
+function renderInfo(rec) {
+  const el = $('#info');
+  if (!rec) { el.innerHTML = '<div class="muted">没有图片</div>'; return; }
+  let h = `<div class="fname">${esc(rec.name)}</div><div class="muted" style="word-break:break-all">${esc(rec.dir || '(根目录)')}</div>
+    <div class="muted">${rec.w ? rec.w + ' × ' + rec.h + ' 像素 · ' : ''}${(rec.file.size / 1024).toFixed(1)} KB</div>`;
+  const en = enabledSrcs();
+  if (!en.length) h += '<div class="none" style="margin-top:12px">没有勾选任何标注来源</div>';
+  for (const s of en) {
+    const objs = objsOf(s, rec);
+    h += `<div class="srch"><i class="sw" style="background:${s.color}"></i><span>${esc(s.short)}</span><span class="muted" style="font-weight:400">${objs ? objs.length + ' 个' : '无条目'}</span></div>`;
+    if (!objs) h += `<div class="none">该来源里没有这张图的记录</div>`;
+    else if (!objs.length) h += `<div class="none">记录存在，但没有对象</div>`;
+    else objs.forEach((o, i) => { h += `<div class="obj" data-s="${s.id}" data-i="${i}">${describe(o, i, s)}</div>`; });
+  }
+  el.innerHTML = h;
+  for (const d of el.querySelectorAll('.obj')) {
+    d.addEventListener('mouseenter', () => { S.hl = { s: +d.dataset.s, i: +d.dataset.i }; draw(); });
+    d.addEventListener('mouseleave', () => { S.hl = null; draw(); });
+  }
+}
+function setStatus(html) { $('#status').innerHTML = html; }
+
+// ------------------------------------------------------------ list / dirs ---
+async function openDir(I) {
+  const tok = ++S.openTok;
+  ++showTok;                                   // 作废上一个文件夹里还没画完的图
+  S.cur = I; S.hl = null;
+  renderDirList();
+  $('#srcs').innerHTML = '<div class="muted">正在读取标注…</div>';
+  setStatus('正在读取标注…');
+  if (!I.sources) {
+    try { I.sources = await resolveSources(I); }
+    catch (e) { I.sources = []; console.error(e); }
+  }
+  if (tok !== S.openTok) return;
+  renderSources();
+  rebuildList(null, true);
+}
+function rebuildList(keep, reset) {
+  const I = S.cur; if (!I) return;
+  const q = S.q.trim().toLowerCase();
+  S.list = I.images.filter(r => {
+    if (q && !r.name.toLowerCase().includes(q)) return false;
+    if (S.filter === 'all') return true;
+    const n = countObjs(r);
+    return S.filter === 'ann' ? n > 0 : n === 0;
+  });
+  const k = keep ? S.list.indexOf(keep) : -1;
+  S.idx = k >= 0 ? k : Math.min(S.idx, Math.max(0, S.list.length - 1));
+  if (reset) S.idx = 0;
+  if (S.view === 'grid') buildGrid(); else showCurrent(!!reset);
+  updateNav();
+  updateSummary();
+}
+function updateSummary() {
+  const I = S.cur; if (!I) return;
+  const nAnn = I.images.filter(r => countObjs(r) > 0).length;
+  S.summary = `${esc(I.path || '(根目录)')} · ${I.images.length} 张图，${nAnn} 张有标注（按已勾选来源）· 当前列表 ${S.list.length} 张`;
+  zoomStatus();
+}
+function setView(v) {
+  S.view = v;
+  $('#app').classList.toggle('grid-mode', v === 'grid');
+  $('#vSingle').classList.toggle('on', v === 'single');
+  $('#vGrid').classList.toggle('on', v === 'grid');
+  $('#thumbRow').style.display = v === 'grid' ? '' : 'none';
+  if (v === 'grid') buildGrid();
+  else { sizeCanvas(); showCurrent(false); }
+  updateNav();
+  zoomStatus();
+}
+
+// ------------------------------------------------------------- controls ---
+$('#btnOpen').addEventListener('click', () => $('#picker').click());
+$('#picker').addEventListener('change', e => {
+  const files = [...e.target.files].map(f => ({ file: f, path: f.webkitRelativePath || f.name }));
+  e.target.value = '';
+  if (files.length) { setStatus('正在整理文件…'); setTimeout(() => ingest(files), 0); }
+});
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; document.body.classList.add('dragover'); });
+window.addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragover'); } });
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', async e => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragover');
+  setStatus('正在读取拖入的文件…');
+  const files = await entriesFromDrop(e.dataTransfer);
+  if (files.length) ingest(files); else setStatus('没有读到文件');
+});
+$('#vSingle').addEventListener('click', () => setView('single'));
+$('#vGrid').addEventListener('click', () => setView('grid'));
+$('#prev').addEventListener('click', () => go(-1));
+$('#next').addEventListener('click', () => go(1));
+for (const b of document.querySelectorAll('#flt button')) b.addEventListener('click', () => {
+  S.filter = b.dataset.f;
+  for (const x of document.querySelectorAll('#flt button')) x.classList.toggle('on', x === b);
+  rebuildList(S.list[S.idx]);
+});
+$('#q').addEventListener('input', e => { S.q = e.target.value; rebuildList(S.list[S.idx]); });
+
+function syncOptControls() {
+  for (const el of document.querySelectorAll('[data-o]')) {
+    const k = el.dataset.o;
+    if (el.type === 'checkbox') el.checked = !!S.opts[k]; else el.value = S.opts[k];
+  }
+  for (const el of document.querySelectorAll('[data-v]')) el.textContent = S.opts[el.dataset.v];
+}
+for (const el of document.querySelectorAll('[data-o]')) {
+  el.addEventListener('input', () => {
+    const k = el.dataset.o;
+    S.opts[k] = el.type === 'checkbox' ? el.checked : +el.value;
+    saveOpts(); syncOptControls();
+    if (k === 'thumb') onThumbSize(); else refreshView();
+  });
+}
+function toggleOpt(k) { S.opts[k] = !S.opts[k]; saveOpts(); syncOptControls(); refreshView(); }
+
+window.addEventListener('keydown', e => {
+  const tg = e.target;
+  if ((tg && tg.matches && tg.matches('input[type=search], input[type=text]')) || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key;
+  if (k === 'ArrowRight' || k === 'd' || k === 'D' || k === 'PageDown') { go(1); e.preventDefault(); }
+  else if (k === 'ArrowLeft' || k === 'a' || k === 'A' || k === 'PageUp') { go(-1); e.preventDefault(); }
+  else if (k === 'Home') { go(-1e9); e.preventDefault(); }
+  else if (k === 'End') { go(1e9); e.preventDefault(); }
+  else if (k === 'g' || k === 'G') setView(S.view === 'grid' ? 'single' : 'grid');
+  else if (k === ' ') { toggleOpt('show'); e.preventDefault(); }
+  else if (k === 'b' || k === 'B') toggleOpt('bbox');
+  else if (k === 't' || k === 'T') toggleOpt('train');
+  else if (k === 'f' || k === 'F') { fitView(); draw(); zoomStatus(); }
+  else if (k === 'Enter' && S.view === 'grid') setView('single');
+  else if (/^[1-9]$/.test(k) && S.cur && S.cur.sources) {
+    const s = S.cur.sources[+k - 1]; if (s) { s.enabled = !s.enabled; onSourcesChanged(); }
+  }
+});
+
+syncOptControls();
+$('#thumbRow').style.display = 'none';
+sizeCanvas();
+</script>
+</body>
+</html>
