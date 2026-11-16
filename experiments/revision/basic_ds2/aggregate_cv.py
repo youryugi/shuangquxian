@@ -50,7 +50,46 @@ DEFAULT_PAIRS = ["hbatbox_aug_none:hbatbox_aug_abs", "aug_none:aug_abs", "hbatbo
                  # 第 13 轮：box-mask 对照（attention 头用填实的 HBAT 框监督，再做同样的 mask → 框）
                  "hbatbox_aug_none:hbatbox_aug_boxmask", "hbatbox_aug_abs:hbatbox_aug_boxmask",
                  "hbatbox_aug_none:hbatbox_aug_boxmask_bandbox", "hbatbox_aug_boxmask:hbatbox_aug_boxmask_bandbox",
-                 "hbatbox_aug_none_scale:hbatbox_aug_boxmask_bandbox", "hbatbox_aug_boxmask_bandbox:hbatbox_aug_abs_bandbox"]
+                 "hbatbox_aug_none_scale:hbatbox_aug_boxmask_bandbox", "hbatbox_aug_boxmask_bandbox:hbatbox_aug_abs_bandbox",
+                 # 第 14 轮：按每条双曲线做 band attention（stage2_instance.py）。baseline 的候选框 + 第二阶段；
+                 # arm：plain = 普通二阶段框回归，unsup = attention 分支不监督，boxmask = 用实例框监督，band = 用实例 band 监督（方法），oracle = 真实实例 band
+                 "hbatbox_aug_none:hbatbox_aug_none_nms", "hbatbox_aug_none_nms:hbatbox_aug_none_s2plain",
+                 "hbatbox_aug_none:hbatbox_aug_none_s2plain", "hbatbox_aug_none:hbatbox_aug_none_s2band",
+                 "hbatbox_aug_none_s2plain:hbatbox_aug_none_s2band", "hbatbox_aug_none_s2unsup:hbatbox_aug_none_s2band",
+                 "hbatbox_aug_none_s2boxmask:hbatbox_aug_none_s2band",
+                 "hbatbox_aug_none_s2plain:hbatbox_aug_none_s2unsup", "hbatbox_aug_none_s2plain:hbatbox_aug_none_s2boxmask",
+                 "hbatbox_aug_none_s2band:hbatbox_aug_none_s2oracle", "hbatbox_aug_none_s2plain:hbatbox_aug_none_s2oracle",
+                 # 框 = attention map 的外接框（实例级 mask 定框）
+                 "hbatbox_aug_none_s2band:hbatbox_aug_none_s2band_mb", "hbatbox_aug_none_s2boxmask_mb:hbatbox_aug_none_s2band_mb",
+                 "hbatbox_aug_none_s2plain:hbatbox_aug_none_s2band_mb",
+                 # 和 Round 12 / 13 的整图方案比
+                 "hbatbox_aug_abs_bandbox:hbatbox_aug_none_s2plain", "hbatbox_aug_abs_bandbox:hbatbox_aug_none_s2band",
+                 "hbatbox_aug_boxmask_bandbox:hbatbox_aug_none_s2plain",
+                 # 第一阶段带 attention（hbatbox_aug_abs）时再接同样的第二阶段：第一阶段的 attention 在框修好之后还剩多少
+                 "hbatbox_aug_abs:hbatbox_aug_abs_s2plain", "hbatbox_aug_none_s2plain:hbatbox_aug_abs_s2plain",
+                 "hbatbox_aug_abs_s2plain:hbatbox_aug_abs_s2band", "hbatbox_aug_none_s2band:hbatbox_aug_abs_s2band",
+                 "hbatbox_aug_none_s2plain:hbatbox_aug_boxmask_s2plain", "hbatbox_aug_boxmask_s2plain:hbatbox_aug_abs_s2plain",
+                 # 第 15 轮：双曲线拟合定框（fit_hyperbola.py）代替按框中心的 Voronoi 切分
+                 "hbatbox_aug_abs_gtbandbox:hbatbox_aug_abs_gtfitbox", "hbatbox_aug_oracle_gtbandbox:hbatbox_aug_oracle_gtfitbox",
+                 "hbatbox_aug_abs_bandbox:hbatbox_aug_abs_fitbox", "hbatbox_aug_none:hbatbox_aug_abs_fitbox", "hbatbox_aug_abs:hbatbox_aug_abs_fitbox",
+                 "hbatbox_aug_none_scale:hbatbox_aug_abs_fitbox", "hbatbox_aug_abs_fitbox:hbatbox_aug_abs_gtfitbox",
+                 "hbatbox_aug_boxmask_bandbox:hbatbox_aug_boxmask_fitbox", "hbatbox_aug_boxmask_fitbox:hbatbox_aug_abs_fitbox",
+                 "hbatbox_aug_abs_fitbox:hbatbox_aug_none_s2plain", "hbatbox_aug_none_s2plain:hbatbox_aug_abs_gtfitbox",
+                 "hbatbox_aug_none_s2oracle:hbatbox_aug_abs_gtfitbox",
+                 "hbatbox_aug_abs_s2plain:hbatbox_aug_abs_gtfitbox",      # 同一个第一阶段上：不用 band 的第二阶段 vs 真实 band + 拟合
+                 "hbatbox_aug_abs_bandbox:hbatbox_aug_abs_bandbox_nms", "hbatbox_aug_abs_bandbox_nms:hbatbox_aug_abs_fitbox",
+                 "hbatbox_aug_abs_gtbandbox_nms:hbatbox_aug_abs_gtfitbox", "hbatbox_aug_boxmask_bandbox:hbatbox_aug_boxmask_bandbox_nms",
+                 "hbatbox_aug_boxmask_bandbox_nms:hbatbox_aug_abs_bandbox_nms",
+                 # 第 16 轮：U 形解码的 attention 头（224×224 上输出和监督），train_basic.py --attn-head unet
+                 "hbatbox_aug_none:hbatbox_aug_abs_unet", "hbatbox_aug_abs:hbatbox_aug_abs_unet",
+                 "hbatbox_aug_none:hbatbox_aug_boxmask_unet", "hbatbox_aug_boxmask:hbatbox_aug_boxmask_unet", "hbatbox_aug_boxmask_unet:hbatbox_aug_abs_unet",
+                 "hbatbox_aug_abs_bandbox:hbatbox_aug_abs_unet_bandbox", "hbatbox_aug_abs_fitbox:hbatbox_aug_abs_unet_fitbox",
+                 "hbatbox_aug_abs_unet:hbatbox_aug_abs_unet_bandbox", "hbatbox_aug_abs_unet:hbatbox_aug_abs_unet_fitbox",
+                 "hbatbox_aug_abs_unet_bandbox:hbatbox_aug_abs_unet_fitbox", "hbatbox_aug_none:hbatbox_aug_abs_unet_fitbox", "hbatbox_aug_none:hbatbox_aug_abs_unet_bandbox",
+                 "hbatbox_aug_boxmask_unet_bandbox:hbatbox_aug_abs_unet_bandbox", "hbatbox_aug_boxmask_unet_fitbox:hbatbox_aug_abs_unet_fitbox",
+                 "hbatbox_aug_boxmask_unet_bandbox:hbatbox_aug_abs_unet_fitbox",
+                 "hbatbox_aug_abs_unet_fitbox:hbatbox_aug_abs_unet_gtfitbox", "hbatbox_aug_abs_gtfitbox:hbatbox_aug_abs_unet_gtfitbox",
+                 "hbatbox_aug_abs_unet_fitbox:hbatbox_aug_none_s2plain", "hbatbox_aug_abs_unet_bandbox:hbatbox_aug_none_s2plain"]
 
 
 def data_dir_of(run_info, fold):

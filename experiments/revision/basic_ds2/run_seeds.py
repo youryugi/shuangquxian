@@ -47,6 +47,9 @@ EXPS = {
     "hbatbox_aug_abs_gate":    ("_hbatbox", ["--mode", "abs", "--augment", "--fuse", "gate"]),
     # ── 第 13 轮：对照——attention 头用填实的 HBAT 框当监督（masks_box，没有任何 band 形状），之后做同样的 mask → 框步骤
     "hbatbox_aug_boxmask":     ("_hbatbox", ["--mode", "abs", "--augment", "--mask-dir", "masks_box"]),
+    # ── 第 16 轮：U 形解码的 attention 头，在 224×224 上输出和监督（--attn-head unet）；框掩码对照用同一个头
+    "hbatbox_aug_abs_unet":     ("_hbatbox", ["--mode", "abs", "--augment", "--attn-head", "unet"]),
+    "hbatbox_aug_boxmask_unet": ("_hbatbox", ["--mode", "abs", "--augment", "--attn-head", "unet", "--mask-dir", "masks_box"]),
 }
 DEFAULT_EXPS = ["hbatbox_aug_none", "hbatbox_aug_abs", "aug_none", "aug_abs"]
 

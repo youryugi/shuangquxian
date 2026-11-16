@@ -68,6 +68,12 @@ def configure_det_stride(stride):
     NMS_KERNEL = 3 if stride == 8 else 5
 
 
+def configure_attn_stride(stride):
+    """attention map 的步长：4（原样，56×56）或 1（第 16 轮：U 形解码的 attention 头，在 224×224 上输出和监督）。"""
+    global ATTN_STRIDE
+    ATTN_STRIDE = stride
+
+
 PAPER_HM_THRESH = 0.375   # 原脚本解码阈值（参照口径）
 PAPER_MAX_DET = 5
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -147,9 +153,12 @@ class PreparedDataset(Dataset):
         if m.shape != (self.input_h, self.input_w):
             m = cv2.resize(m, (self.input_w, self.input_h), interpolation=cv2.INTER_NEAREST)
         band_full = (m > 127).astype(np.float32)
-        # 与原脚本相同：面积插值到注意力分辨率后按 0.5 二值化
-        band = cv2.resize(band_full, (self.attn_w, self.attn_h), interpolation=cv2.INTER_AREA)
-        band = (band > 0.5).astype(np.float32)
+        if (self.attn_h, self.attn_w) == (self.input_h, self.input_w):
+            band = band_full          # 第 16 轮：attention 在输入分辨率上监督，不缩小、不重新二值化
+        else:
+            # 与原脚本相同：面积插值到注意力分辨率后按 0.5 二值化
+            band = cv2.resize(band_full, (self.attn_w, self.attn_h), interpolation=cv2.INTER_AREA)
+            band = (band > 0.5).astype(np.float32)
 
         meta = {"stem": stem, "orig_size": (oh, ow), "scale": (sx, sy), "boxes": self.gt[stem]["boxes"]}
         return (torch.from_numpy(img_np).unsqueeze(0).float(), torch.from_numpy(hm).unsqueeze(0).float(),
@@ -225,15 +234,34 @@ def extent_channels(A, pool):
     return F.avg_pool2d(out, 2) if pool else out
 
 
+class AttnDecoder(nn.Module):
+    """第 16 轮：U 形解码的 attention 头（--attn-head unet）。从 bottleneck（28×28，receptive field ≈ 68 px）逐级上采样，
+    接 f3 / f2 / f1 的 skip，在输入分辨率（224×224）上输出 band。原来的头只看 f3（receptive field ≈ 40 px，一条双曲线宽 ≈ 65 px）。"""
+
+    def __init__(self, base_ch):
+        super().__init__()
+        self.d3 = ConvBlock(base_ch * 8 + base_ch * 4, base_ch * 2)
+        self.d2 = ConvBlock(base_ch * 2 + base_ch * 2, base_ch)
+        self.d1 = ConvBlock(base_ch + base_ch, base_ch // 2)
+        self.out = nn.Conv2d(base_ch // 2, 1, 1)
+
+    def forward(self, feat, f3, f2, f1):
+        y = self.d3(torch.cat([F.interpolate(feat, scale_factor=2, mode="nearest"), f3], dim=1))
+        y = self.d2(torch.cat([F.interpolate(y, scale_factor=2, mode="nearest"), f2], dim=1))
+        y = self.d1(torch.cat([F.interpolate(y, scale_factor=2, mode="nearest"), f1], dim=1))
+        return self.out(y)
+
+
 class AttnBBoxNet(nn.Module):
     """三层 backbone + CenterNet 头（原样）。扩展：
     oracle      第 7 轮：不设注意力头，把真实带（56×56）直接当 gate 融合 —— 融合通路的上限。
     fuse=extent 第 8 轮 a：gate 不再是 1 通道池化，而是 4 通道"范围"特征（extent_channels）。
     det_stride=4 第 8 轮 b：bottleneck 上采样回 56×56 与 f3 拼接后出头，注意力在 56×56 融合、不再池化。"""
 
-    def __init__(self, in_ch=1, base_ch=32, use_attn=True, fuse="concat", oracle=False, det_stride=8):
+    def __init__(self, in_ch=1, base_ch=32, use_attn=True, fuse="concat", oracle=False, det_stride=8, attn_arch="conv"):
         super().__init__()
-        self.use_attn, self.fuse, self.oracle, self.det_stride = use_attn, fuse, oracle, det_stride
+        self.use_attn, self.fuse, self.oracle, self.det_stride, self.attn_arch = use_attn, fuse, oracle, det_stride, attn_arch
+        assert attn_arch == "conv" or (det_stride == 8 and fuse in ("concat", "gate")), "unet attention 头只支持 det_stride=8、concat / gate 融合"
         self.down1 = DownBlock(in_ch, base_ch)
         self.down2 = DownBlock(base_ch, base_ch * 2)
         self.down3 = DownBlock(base_ch * 2, base_ch * 4)
@@ -241,7 +269,9 @@ class AttnBBoxNet(nn.Module):
         mid = base_ch * 8
         if det_stride == 4:
             self.up = ConvBlock(mid + base_ch * 4, mid)
-        if use_attn:
+        if use_attn and attn_arch == "unet":
+            self.attn_head = AttnDecoder(base_ch)
+        elif use_attn:
             self.attn_head = nn.Sequential(
                 nn.Conv2d(base_ch * 4, base_ch * 2, 3, padding=1, bias=False),
                 nn.BatchNorm2d(base_ch * 2), nn.ReLU(inplace=True), nn.Conv2d(base_ch * 2, 1, 1))
@@ -259,14 +289,14 @@ class AttnBBoxNet(nn.Module):
                                          nn.BatchNorm2d(mid // 4), nn.ReLU(inplace=True), nn.Conv2d(mid // 4, 2, 1))
 
     def forward(self, x, band=None):
-        _, x = self.down1(x); _, x = self.down2(x)
+        f1, x = self.down1(x); f2, x = self.down2(x)
         f3, x = self.down3(x)
         feat = self.bottleneck(x)
         if self.det_stride == 4:
             feat = self.up(torch.cat([F.interpolate(feat, scale_factor=2, mode="nearest"), f3], dim=1))
         a_logit, A = None, None
         if self.use_attn:
-            a_logit = self.attn_head(f3)
+            a_logit = self.attn_head(feat, f3, f2, f1) if self.attn_arch == "unet" else self.attn_head(f3)
             A = torch.sigmoid(a_logit)
         elif self.oracle:
             assert band is not None, "oracle 模式需要真实带"
@@ -276,7 +306,7 @@ class AttnBBoxNet(nn.Module):
             if self.fuse == "extent":
                 feat = self.fuse_conv(torch.cat([feat, extent_channels(A, pool)], dim=1))
             else:
-                gate = F.avg_pool2d(A, 2) if pool else A
+                gate = F.avg_pool2d(A, HM_STRIDE // ATTN_STRIDE) if pool else A      # 原样：56 → 28（池化 2）；unet 头：224 → 28（池化 8）
                 if self.fuse == "concat":
                     feat = self.fuse_conv(torch.cat([feat, gate], dim=1))
                 else:
@@ -284,7 +314,7 @@ class AttnBBoxNet(nn.Module):
         return self.heatmap_head(feat), torch.sigmoid(self.wh_head(feat)), self.offset_head(feat), a_logit
 
 
-def build_model(use_attn, fuse, seed, oracle=False, det_stride=8):
+def build_model(use_attn, fuse, seed, oracle=False, det_stride=8, attn_arch="conv"):
     """配对初始化：backbone + 三个检测头用 seed 初始化，两臂逐参数相同；注意力分支（attn_head / fuse_conv）
     用 seed+10000 单独初始化。这样同一 seed 下两臂的差异只来自注意力分支本身。"""
     torch.manual_seed(seed)
@@ -292,7 +322,7 @@ def build_model(use_attn, fuse, seed, oracle=False, det_stride=8):
     if not use_attn and not oracle:
         return shared.to(device)
     torch.manual_seed(seed + 10000)
-    model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=use_attn, fuse=fuse, oracle=oracle, det_stride=det_stride)
+    model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=use_attn, fuse=fuse, oracle=oracle, det_stride=det_stride, attn_arch=attn_arch)
     res = model.load_state_dict(shared.state_dict(), strict=False)
     assert not res.unexpected_keys and all(k.startswith(("attn_head.", "fuse_conv.")) for k in res.missing_keys), res
     return model.to(device)
@@ -458,6 +488,8 @@ def main():
     ap.add_argument("--det-stride", type=int, default=8, choices=[4, 8], help="检测头步长；4 = 解码回 56×56 出头(第 8 轮)")
     ap.add_argument("--train-frac", type=float, default=1.0, help="训练集比例(第 9 轮数据量曲线)，子集只由 fold 决定")
     ap.add_argument("--mask-dir", default="masks_band")
+    ap.add_argument("--attn-head", default="conv", choices=["conv", "unet"],
+                    help="conv=原样(f3 上一个 3×3 卷积，56×56)；unet=U 形解码到 224×224，全分辨率监督(第 16 轮)")
     ap.add_argument("--augment", action="store_true", help="训练集水平翻转增强（原脚本自带的那一种）")
     ap.add_argument("--runs", default=str(HERE / "runs"))
     ap.add_argument("--fold-in-path", action="store_true", help="run 目录名带折号：f<fold>_seed<k>（5 折实验用）")
@@ -477,6 +509,7 @@ def main():
 
     set_seed(args.seed)
     configure_det_stride(args.det_stride)
+    configure_attn_stride(1 if (args.attn_head == "unet" and args.mode == "abs") else 4)
     tr = PreparedDataset(data_dir, "train", args.mask_dir, subset_frac=args.train_frac, subset_seed=1000 + fold)
     va = PreparedDataset(data_dir, "val", args.mask_dir)
     te = PreparedDataset(data_dir, "test", args.mask_dir)
@@ -489,7 +522,8 @@ def main():
     tl = DataLoader(AugWrapper(tr) if args.augment else tr, batch_size=BATCH, shuffle=True, num_workers=args.workers, pin_memory=pin,
                     persistent_workers=args.workers > 0, worker_init_fn=_worker_init, collate_fn=collate, generator=order_gen)
 
-    model = build_model(args.mode == "abs", args.fuse, seed_of_run, oracle=(args.mode == "oracle"), det_stride=args.det_stride)
+    model = build_model(args.mode == "abs", args.fuse, seed_of_run, oracle=(args.mode == "oracle"), det_stride=args.det_stride,
+                        attn_arch=args.attn_head)
     fingerprint = init_fingerprint(model)
     print(f"paired init fingerprint (shared layers): {fingerprint}", flush=True)
     torch.manual_seed(seed_of_run)   # 训练中其余随机数（如有）从同一状态出发
@@ -523,7 +557,8 @@ def main():
     info = dict(dataset=dataset_name, exp=exp, seed=args.seed,
                 model=f"AttnBBoxNet(base_ch={BASE_CH}, 3 down blocks, CenterNet head, det_stride={args.det_stride})",
                 pretrained=False, mode=args.mode, lam_att=args.lam_att if args.mode == "abs" else None, fuse=args.fuse,
-                oracle_band=(args.mode == "oracle"), det_stride=args.det_stride, train_frac=args.train_frac, n_train=len(tr),
+                oracle_band=(args.mode == "oracle"), det_stride=args.det_stride, attn_head=args.attn_head, attn_stride=ATTN_STRIDE,
+                train_frac=args.train_frac, n_train=len(tr),
                 mask_dir=args.mask_dir, augment=args.augment, box_source=manifest.get("box_source"), fold=fold,
                 paired_init=True, init_fingerprint=fingerprint,
                 imgsz=INPUT_SIZE[0], epochs=args.epochs, batch=BATCH, lr=LR, optimizer="Adam",
