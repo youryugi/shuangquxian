@@ -42,16 +42,20 @@ def get_changed_files():
         sys.exit(1)
 
     file_list = []
-    # NUL 分隔
-    entries = [e for e in output.split("\0") if e]
-    for e in entries:
+    # NUL 分隔；-z 模式下路径不加引号，不能 strip
+    entries = output.split("\0")
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        i += 1
         if len(e) < 4:
             continue
-        status = e[:2]         # 例如 "??", " M", "D "
+        status = e[:2]         # 例如 "??", " M", "D ", "R "
         filepath = e[3:]       # 跳过 "XY "
-        filepath = filepath.strip().strip('"')
-        if filepath:
-            file_list.append((status, filepath))
+        # 重命名/复制条目后面紧跟一个原路径条目（没有 XY 前缀），必须一起消费掉
+        if status[0] in "RC" and i < len(entries):
+            i += 1
+        file_list.append((status, filepath))
 
     return file_list
 
@@ -147,24 +151,15 @@ def process_batch(file_list, batch_num, batch_size):
     print(f"\n--- 处理第 {batch_num} 批 (文件数: {len(file_list)}, 大小: {size_mb:.2f} MB) ---")
     chunk_size = 50
 
-    # 区分 add 和 rm
-    to_add = [f for s, f in file_list if "D" not in s]
-    to_rm = [f for s, f in file_list if "D" in s]
+    # 工作区一侧(Y)为空格的条目已经完整暂存，commit 会带上，不用再 add；
+    # 其余（新增/修改/删除）统一用 git add -A，删除也能正确暂存
+    to_add = [f for s, f in file_list if s[1] != " "]
 
     if to_add:
-        print("正在添加到暂存区 (git add)...")
+        print("正在添加到暂存区 (git add -A)...")
         for i in range(0, len(to_add), chunk_size):
             chunk = to_add[i:i + chunk_size]
-            cmd = ["git", "add"] + chunk
-            success, _ = run_command(cmd)
-            if not success:
-                sys.exit(1)
-
-    if to_rm:
-        print("正在标记删除 (git rm)...")
-        for i in range(0, len(to_rm), chunk_size):
-            chunk = to_rm[i:i + chunk_size]
-            cmd = ["git", "rm"] + chunk
+            cmd = ["git", "add", "-A", "--"] + chunk
             success, _ = run_command(cmd)
             if not success:
                 sys.exit(1)
