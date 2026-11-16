@@ -97,7 +97,16 @@ def append_to_gitignore(filepath: str) -> bool:
         f.write(f"\n{norm}\n")
     return True
 
+def chdir_to_repo_root():
+    """git status 输出的路径相对于仓库根目录，所以必须在根目录下执行后续所有命令"""
+    success, output = run_command(["git", "rev-parse", "--show-toplevel"])
+    if not success:
+        print("当前目录不在 git 仓库内。")
+        sys.exit(1)
+    os.chdir(output.strip())
+
 def main():
+    chdir_to_repo_root()
     # === 修改点：只获取变动的文件 ===
     files_to_process = get_changed_files()
     
