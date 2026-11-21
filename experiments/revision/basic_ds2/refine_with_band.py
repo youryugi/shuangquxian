@@ -1,7 +1,7 @@
-"""README §4：用预测的带（注意力图）修正检测框的范围 —— 纯后处理，不重训。
+"""rounds.md Round 6：用预测的带（注意力图）修正检测框的范围 —— 纯后处理，不重训。
 
     python refine_with_band.py infer     # 用 runs_cv/ds2/hbatbox_aug_abs 的 50 个 final.pth 重新推理，保存注意力图
-    python refine_with_band.py refine    # 在注意力图上做框修正、在合并验证集上选参数（逐 seed / 全局两种）、按 README §1.2 协议评测试集
+    python refine_with_band.py refine    # 在注意力图上做框修正、在合并验证集上选参数（逐 seed / 全局两种）、按 README 附录 A 协议评测试集
 
 做法（每张图）：
   1. 注意力图 56×56 → 双线性放大到输入分辨率，按阈值 t 二值化得到带区域 B；

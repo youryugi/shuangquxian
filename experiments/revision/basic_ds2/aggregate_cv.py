@@ -89,7 +89,61 @@ DEFAULT_PAIRS = ["hbatbox_aug_none:hbatbox_aug_abs", "aug_none:aug_abs", "hbatbo
                  "hbatbox_aug_boxmask_unet_bandbox:hbatbox_aug_abs_unet_bandbox", "hbatbox_aug_boxmask_unet_fitbox:hbatbox_aug_abs_unet_fitbox",
                  "hbatbox_aug_boxmask_unet_bandbox:hbatbox_aug_abs_unet_fitbox",
                  "hbatbox_aug_abs_unet_fitbox:hbatbox_aug_abs_unet_gtfitbox", "hbatbox_aug_abs_gtfitbox:hbatbox_aug_abs_unet_gtfitbox",
-                 "hbatbox_aug_abs_unet_fitbox:hbatbox_aug_none_s2plain", "hbatbox_aug_abs_unet_bandbox:hbatbox_aug_none_s2plain"]
+                 "hbatbox_aug_abs_unet_fitbox:hbatbox_aug_none_s2plain", "hbatbox_aug_abs_unet_bandbox:hbatbox_aug_none_s2plain",
+                 # 第 18 轮：修好翻转（train_basic.py 几何翻转，hbatbox_flipfix_*）后重做第 4–16 轮的主要配对；新口径（预测框裁到图内）
+                 "hbatbox_flipfix_none:hbatbox_flipfix_abs", "hbatbox_flipfix_none:hbatbox_flipfix_oracle",
+                 "hbatbox_flipfix_abs:hbatbox_flipfix_oracle", "hbatbox_flipfix_none:hbatbox_flipfix_abs_bandbox",
+                 "hbatbox_flipfix_abs:hbatbox_flipfix_abs_bandbox", "hbatbox_flipfix_none:hbatbox_flipfix_none_scale",
+                 "hbatbox_flipfix_abs:hbatbox_flipfix_abs_scale", "hbatbox_flipfix_none_scale:hbatbox_flipfix_abs_bandbox",
+                 "hbatbox_flipfix_abs_scale:hbatbox_flipfix_abs_bandbox", "hbatbox_flipfix_abs_bandbox:hbatbox_flipfix_abs_gtbandbox",
+                 "hbatbox_flipfix_none:hbatbox_flipfix_oracle_gtbandbox", "hbatbox_flipfix_none:hbatbox_flipfix_boxmask",
+                 "hbatbox_flipfix_abs:hbatbox_flipfix_boxmask", "hbatbox_flipfix_none:hbatbox_flipfix_boxmask_bandbox",
+                 "hbatbox_flipfix_boxmask:hbatbox_flipfix_boxmask_bandbox", "hbatbox_flipfix_none_scale:hbatbox_flipfix_boxmask_bandbox",
+                 "hbatbox_flipfix_boxmask_bandbox:hbatbox_flipfix_abs_bandbox", "hbatbox_flipfix_abs_gtbandbox:hbatbox_flipfix_abs_gtfitbox",
+                 "hbatbox_flipfix_oracle_gtbandbox:hbatbox_flipfix_oracle_gtfitbox", "hbatbox_flipfix_abs_bandbox:hbatbox_flipfix_abs_fitbox",
+                 "hbatbox_flipfix_none:hbatbox_flipfix_abs_fitbox", "hbatbox_flipfix_abs:hbatbox_flipfix_abs_fitbox",
+                 "hbatbox_flipfix_none_scale:hbatbox_flipfix_abs_fitbox", "hbatbox_flipfix_abs_fitbox:hbatbox_flipfix_abs_gtfitbox",
+                 "hbatbox_flipfix_boxmask_bandbox:hbatbox_flipfix_boxmask_fitbox", "hbatbox_flipfix_boxmask_fitbox:hbatbox_flipfix_abs_fitbox",
+                 "hbatbox_flipfix_abs_bandbox:hbatbox_flipfix_abs_bandbox_nms", "hbatbox_flipfix_abs_bandbox_nms:hbatbox_flipfix_abs_fitbox",
+                 "hbatbox_flipfix_abs_gtbandbox_nms:hbatbox_flipfix_abs_gtfitbox",
+                 "hbatbox_flipfix_boxmask_bandbox:hbatbox_flipfix_boxmask_bandbox_nms",
+                 "hbatbox_flipfix_boxmask_bandbox_nms:hbatbox_flipfix_abs_bandbox_nms", "hbatbox_flipfix_none:hbatbox_flipfix_abs_unet",
+                 "hbatbox_flipfix_abs:hbatbox_flipfix_abs_unet", "hbatbox_flipfix_none:hbatbox_flipfix_boxmask_unet",
+                 "hbatbox_flipfix_boxmask:hbatbox_flipfix_boxmask_unet", "hbatbox_flipfix_boxmask_unet:hbatbox_flipfix_abs_unet",
+                 "hbatbox_flipfix_abs_bandbox:hbatbox_flipfix_abs_unet_bandbox", "hbatbox_flipfix_abs_fitbox:hbatbox_flipfix_abs_unet_fitbox",
+                 "hbatbox_flipfix_abs_unet:hbatbox_flipfix_abs_unet_bandbox", "hbatbox_flipfix_abs_unet:hbatbox_flipfix_abs_unet_fitbox",
+                 "hbatbox_flipfix_abs_unet_bandbox:hbatbox_flipfix_abs_unet_fitbox", "hbatbox_flipfix_none:hbatbox_flipfix_abs_unet_fitbox",
+                 "hbatbox_flipfix_none:hbatbox_flipfix_abs_unet_bandbox", "hbatbox_flipfix_boxmask_unet_bandbox:hbatbox_flipfix_abs_unet_bandbox",
+                 "hbatbox_flipfix_boxmask_unet_fitbox:hbatbox_flipfix_abs_unet_fitbox",
+                 "hbatbox_flipfix_boxmask_unet_bandbox:hbatbox_flipfix_abs_unet_fitbox",
+                 "hbatbox_flipfix_abs_unet_fitbox:hbatbox_flipfix_abs_unet_gtfitbox",
+                 "hbatbox_flipfix_abs_gtfitbox:hbatbox_flipfix_abs_unet_gtfitbox", "hbatbox_flipfix_boxmask_bandbox_nms:hbatbox_flipfix_abs_fitbox",
+                 "hbatbox_flipfix_boxmask_bandbox_nms:hbatbox_flipfix_abs_unet_fitbox",
+                 # 只修翻转的变化（同一配置，旧 run → 新 run）
+                 "hbatbox_aug_none:hbatbox_flipfix_none", "hbatbox_aug_abs:hbatbox_flipfix_abs", "hbatbox_aug_boxmask:hbatbox_flipfix_boxmask",
+                 "hbatbox_aug_oracle:hbatbox_flipfix_oracle", "hbatbox_aug_abs_unet:hbatbox_flipfix_abs_unet",
+                 "hbatbox_aug_boxmask_unet:hbatbox_flipfix_boxmask_unet", "hbatbox_aug_abs_bandbox:hbatbox_flipfix_abs_bandbox",
+                 "hbatbox_aug_abs_fitbox:hbatbox_flipfix_abs_fitbox", "hbatbox_aug_boxmask_bandbox:hbatbox_flipfix_boxmask_bandbox",
+                 "hbatbox_aug_boxmask_fitbox:hbatbox_flipfix_boxmask_fitbox", "hbatbox_aug_abs_unet_fitbox:hbatbox_flipfix_abs_unet_fitbox",
+                 "hbatbox_aug_abs_unet_bandbox:hbatbox_flipfix_abs_unet_bandbox",
+                 "hbatbox_aug_boxmask_unet_fitbox:hbatbox_flipfix_boxmask_unet_fitbox",
+                 "hbatbox_aug_boxmask_unet_bandbox:hbatbox_flipfix_boxmask_unet_bandbox", "hbatbox_aug_none_scale:hbatbox_flipfix_none_scale",
+                 "hbatbox_aug_abs_gtfitbox:hbatbox_flipfix_abs_gtfitbox", "hbatbox_aug_abs_gtbandbox:hbatbox_flipfix_abs_gtbandbox",
+                 # 第 17 轮：两种翻转实现的交叉检查、参数化头（train_param.py）
+                 "hbatbox_flipfix_none:hbatbox_augfix_none", "hbatbox_flipfix_none:hbatbox_augfix_param",
+                 "hbatbox_flipfix_none:hbatbox_augfix_pseudo"]
+# 第 19 轮：固定测试集 + 嵌套训练子集（训练集 25 / 50 / 75%；100% 即上面第 18 轮的配对）
+def _frac(name, p):   # "abs_fitbox" → "hbatbox_flipfix_abs_frac25_fitbox"（比例插在 arm 名后面，和 infer_bandbox.py 的变体名一致）
+    arm, _, rest = name.partition("_")
+    return f"hbatbox_flipfix_{arm}_frac{p}" + (f"_{rest}" if rest else "")
+
+
+DEFAULT_PAIRS += [f"{_frac(a, p)}:{_frac(b, p)}" for p in (25, 50, 75) for a, b in (
+    ("none", "abs"), ("none", "boxmask"), ("boxmask", "abs"),
+    ("none", "none_scale"), ("none", "abs_fitbox"), ("none_scale", "abs_fitbox"),
+    ("boxmask_fitbox", "abs_fitbox"), ("boxmask_bandbox_nms", "abs_fitbox"), ("boxmask_bandbox", "abs_bandbox"),
+    ("abs_bandbox", "abs_fitbox"), ("abs_fitbox", "abs_gtfitbox"), ("none", "boxmask_bandbox_nms"))]
+DEFAULT_PAIRS += ["hbatbox_flipfix_boxmask:hbatbox_flipfix_abs"]   # 100% 一列的 box-mask fusion → band fusion（上面只有反方向）
 
 
 def data_dir_of(run_info, fold):

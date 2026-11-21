@@ -50,6 +50,27 @@ EXPS = {
     # ── 第 16 轮：U 形解码的 attention 头，在 224×224 上输出和监督（--attn-head unet）；框掩码对照用同一个头
     "hbatbox_aug_abs_unet":     ("_hbatbox", ["--mode", "abs", "--augment", "--attn-head", "unet"]),
     "hbatbox_aug_boxmask_unet": ("_hbatbox", ["--mode", "abs", "--augment", "--attn-head", "unet", "--mask-dir", "masks_box"]),
+    # ── 第 17 轮：train_param.py（第三项 = 脚本）。翻转增强修好（几何翻转）；box = 原 baseline 只修翻转，
+    #    param = 顶点 + 真实 HBAT 参数，pseudo = 同结构、参数从框反推（只用框标注的对照）
+    "hbatbox_augfix_none":   ("_hbatbox", ["--head", "box"], "train_param.py"),
+    "hbatbox_augfix_param":  ("_hbatbox", ["--head", "param"], "train_param.py"),
+    "hbatbox_augfix_pseudo": ("_hbatbox", ["--head", "pseudo"], "train_param.py"),
+    # ── 2026-11-21：train_basic.py 的翻转 bug（目标偏 8 px）修好后重跑第 4–16 轮的核心 arm（参数与对应的 hbatbox_aug_* 相同）
+    "hbatbox_flipfix_none":         ("_hbatbox", ["--mode", "none", "--augment"]),
+    "hbatbox_flipfix_abs":          ("_hbatbox", ["--mode", "abs", "--augment"]),
+    "hbatbox_flipfix_boxmask":      ("_hbatbox", ["--mode", "abs", "--augment", "--mask-dir", "masks_box"]),
+    "hbatbox_flipfix_oracle":       ("_hbatbox", ["--mode", "oracle", "--augment"]),
+    "hbatbox_flipfix_abs_unet":     ("_hbatbox", ["--mode", "abs", "--augment", "--attn-head", "unet"]),
+    "hbatbox_flipfix_boxmask_unet": ("_hbatbox", ["--mode", "abs", "--augment", "--attn-head", "unet", "--mask-dir", "masks_box"]),
+    # 回归检查：--flip-legacy 应逐位复现旧的 hbatbox_aug_none
+    "hbatbox_fliplegacy_none":      ("_hbatbox", ["--mode", "none", "--augment", "--flip-legacy"]),
+    # 第 19 轮：固定测试集 + 嵌套训练子集（回应 R2-6）。每折测试集、验证集不变，训练集取 25 / 50 / 75%（子集只由 fold 决定，
+    # 25 ⊂ 50 ⊂ 75 ⊂ 100，各 arm、各 seed 相同）；100% = 上面的 hbatbox_flipfix_*。必须 --workers 1。
+    **{f"hbatbox_flipfix_{arm}_frac{p}": ("_hbatbox", args + ["--train-frac", f"0.{p}"])
+       for p in (25, 50, 75)
+       for arm, args in (("none", ["--mode", "none", "--augment"]),
+                         ("abs", ["--mode", "abs", "--augment"]),
+                         ("boxmask", ["--mode", "abs", "--augment", "--mask-dir", "masks_box"]))},
 }
 DEFAULT_EXPS = ["hbatbox_aug_none", "hbatbox_aug_abs", "aug_none", "aug_abs"]
 
@@ -78,14 +99,15 @@ def main():
     for fold in args.folds:
         for seed in args.seeds:
             for exp in args.exps:
-                suffix, extra = EXPS[exp]
+                suffix, extra, *script = EXPS[exp]
+                script = script[0] if script else "train_basic.py"
                 data = DATASETS / f"ds2_f{fold}_s100{suffix}"
                 run_dir = runs / "ds2" / exp / f"f{fold}_seed{seed}"
                 if (run_dir / "metrics.json").exists():
                     continue
                 if not data.exists():
                     raise SystemExit(f"dataset dir missing: {data} (run prepare_data.py --fold {fold} first)")
-                cmd = [PY, "-X", "utf8", str(HERE / "train_basic.py"), "--data", str(data), "--exp", exp, "--seed", str(seed),
+                cmd = [PY, "-X", "utf8", str(HERE / script), "--data", str(data), "--exp", exp, "--seed", str(seed),
                        "--runs", str(runs), "--fold-in-path", "--workers", str(args.workers), *extra, *args.extra]
                 jobs.append((exp, fold, seed, cmd))
     say(f"{len(jobs)} runs to do  ({time.strftime('%Y-%m-%d %H:%M:%S')})")

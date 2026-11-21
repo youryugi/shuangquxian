@@ -40,7 +40,7 @@ DETCMP = HERE.parent / "detector_comparison"
 DATASETS = DETCMP / "datasets"
 sys.path.insert(0, str(DETCMP))
 sys.path.insert(0, str(REPO / "tools" / "annotation"))
-from evaluate import box_iou, collect, select_conf  # noqa: E402
+from evaluate import box_iou, clip_preds, collect, select_conf  # noqa: E402
 import hbat  # noqa: E402
 
 HBAT_JSON = REPO / "data" / "additional_utilities" / "hbat" / "annotations.json"
@@ -131,8 +131,9 @@ def load_seed(exp, seed, runs):
         ri = json.load(open(rd / "run_info.json", encoding="utf-8"))
         suffix = "_hbatbox" if ri.get("box_source") == "hbat" else ""
         g = json.load(open(DATASETS / f"ds2_f{fold}_s100{suffix}" / "gt_boxes.json", encoding="utf-8"))
-        val_folds.append((json.load(open(rd / "preds_val.json", encoding="utf-8")), g["val"]))
-        pt.update(json.load(open(rd / "preds_test.json", encoding="utf-8")))
+        # 和 evaluate.collect 一样，预测框先裁到图内（只比较图片范围内的重叠）
+        val_folds.append((clip_preds(json.load(open(rd / "preds_val.json", encoding="utf-8")), g["val"]), g["val"]))
+        pt.update(clip_preds(json.load(open(rd / "preds_test.json", encoding="utf-8")), g["test"]))
         gt.update(g["test"])
     return val_folds, pt, gt
 

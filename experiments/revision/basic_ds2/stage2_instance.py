@@ -67,7 +67,7 @@ FOLDS, SEEDS = list(range(5)), list(range(10))
 ARMS = ("plain", "unsup", "boxmask", "band", "oracle")
 ATT_ARMS = ("unsup", "boxmask", "band")
 
-# ───────────────────────── 超参数（见 README Round 14 的"设计"一节） ─────────────────────────
+# ───────────────────────── 超参数（见 rounds.md Round 14 的"设计"一节） ─────────────────────────
 S = 96                 # 窗口重采样后的边长
 K = 2.5                # 窗口 = 候选框宽高各放大 K 倍（验证集上 K=2.5 时 82% 的 GT 整个落在窗口内）
 MIN_SIDE = 12.0        # 候选框的宽高下限（px），防止窗口退化

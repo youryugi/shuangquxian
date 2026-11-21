@@ -53,6 +53,11 @@ DATASETS = HERE.parent / "detector_comparison" / "datasets"
 FOLDS, SEEDS = list(range(5)), list(range(10))
 SRC_EXPS = ("hbatbox_aug_none", "hbatbox_aug_abs", "hbatbox_aug_oracle", "hbatbox_aug_boxmask",
             "hbatbox_aug_abs_unet", "hbatbox_aug_boxmask_unet")       # 后两个：第 16 轮
+# 2026-11-21：train_basic.py 翻转 bug（目标偏 8 px）修好后重训的同一组来源实验
+SRC_EXPS = SRC_EXPS + tuple(e.replace("hbatbox_aug_", "hbatbox_flipfix_") for e in SRC_EXPS)
+# 第 19 轮：固定测试集 + 嵌套训练子集（训练集 25 / 50 / 75%，run_seeds.py 的 hbatbox_flipfix_{none,abs,boxmask}_frac*）
+FRACS = (25, 50, 75)
+SRC_EXPS = SRC_EXPS + tuple(f"hbatbox_flipfix_{a}_frac{p}" for p in FRACS for a in ("none", "abs", "boxmask"))
 K_GRID = (1.0, 1.05, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5, 1.6)
 
 
@@ -269,6 +274,17 @@ VARIANTS = {
     "hbatbox_aug_boxmask_unet_bandbox": ("hbatbox_aug_boxmask_unet", list(itertools.product(T_GRID, SEED_GRID, MODES))),
     "hbatbox_aug_boxmask_unet_fitbox":  ("hbatbox_aug_boxmask_unet", list(itertools.product(T_GRID, SEED_GRID, MODES, NMS_GRID))),
 }
+# 2026-11-21：翻转修好后的模型走完全相同的变体（名字里 hbatbox_aug_ → hbatbox_flipfix_，参数网格不变）
+VARIANTS.update({v.replace("hbatbox_aug_", "hbatbox_flipfix_"): (src.replace("hbatbox_aug_", "hbatbox_flipfix_"), grid)
+                 for v, (src, grid) in list(VARIANTS.items())})
+# 第 19 轮：每个训练比例走同一组变体（参数网格不变）：scale control、Voronoi（± NMS）、fit、真实 band + fit（上限）
+FRAC_VARIANTS = ("hbatbox_flipfix_none_scale",
+                 "hbatbox_flipfix_abs_bandbox", "hbatbox_flipfix_abs_bandbox_nms", "hbatbox_flipfix_abs_fitbox", "hbatbox_flipfix_abs_gtfitbox",
+                 "hbatbox_flipfix_boxmask_bandbox", "hbatbox_flipfix_boxmask_bandbox_nms", "hbatbox_flipfix_boxmask_fitbox")
+for _p in FRACS:
+    for _v in FRAC_VARIANTS:
+        _src, _grid = VARIANTS[_v]
+        VARIANTS[_v.replace(_src, f"{_src}_frac{_p}", 1)] = (f"{_src}_frac{_p}", _grid)
 
 
 def merge_sweep(new_sections):
@@ -290,7 +306,7 @@ def build(variants):
     gt_val = {f: json.load(open(data_dir(f) / "gt_boxes.json", encoding="utf-8"))["val"] for f in FOLDS}
     gt_test = {f: json.load(open(data_dir(f) / "gt_boxes.json", encoding="utf-8"))["test"] for f in FOLDS}
     OUT.mkdir(parents=True, exist_ok=True)
-    chosen = json.load(open(OUT / "chosen.json", encoding="utf-8")) if (OUT / "chosen.json").exists() else {}
+    chosen = {}   # 只记本次的变体；结束时加锁合并进 chosen.json（可按变体并行开多个 build 进程）
     sweep_sections = {}
     for variant in variants:
         src, grid = VARIANTS[variant]
@@ -332,8 +348,13 @@ def build(variants):
                     if (data_dir(f) / f"gt_boxes_{alt}.json").exists():
                         evaluate_run(rd, data_dir(f), gt_name=f"gt_boxes_{alt}.json", out_name=f"metrics_{alt}.json")
         print(f"  chosen {best}: val F1 {chosen[variant]['val_F1_mean']:.3f}, test F1 {chosen[variant]['test_F1_mean_at_chosen']:.3f}", flush=True)
-    json.dump(chosen, open(OUT / "chosen.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    merge_sweep(sweep_sections)
+    import fcntl
+    with open(OUT / ".build.lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        allc = json.load(open(OUT / "chosen.json", encoding="utf-8")) if (OUT / "chosen.json").exists() else {}
+        allc.update(chosen)
+        json.dump(allc, open(OUT / "chosen.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        merge_sweep(sweep_sections)
     print(json.dumps(chosen, ensure_ascii=False, indent=1))
 
 

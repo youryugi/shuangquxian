@@ -5,6 +5,9 @@ Prediction file format (written by every train_*.py):
 GT: <dataset_dir>/gt_boxes.json written by prepare_data.py.
 
 Protocol (same for all models, see README):
+  * every prediction is clipped to the image ([0, width] x [0, height] from gt_boxes.json) before matching,
+    so only the in-image part of a box counts, the same as the GT boxes (hbat.hyperbola_to_bbox clips them);
+    a prediction entirely outside the image keeps zero area and can only be a FP (2026-11-21)
   * greedy one-to-one matching, IoU >= 0.5, predictions sorted by score (same rule as the paper's evaluate())
   * primary number: F1 on TEST at the confidence threshold that maximises F1 on VAL ("val-selected")
   * also reported: AP50 (all-point interpolation), P/R/F1 at fixed thresholds, oracle F1 (best threshold on test)
@@ -41,6 +44,21 @@ def box_iou(a, b):
     return inter / ua if ua > 0 else 0.0
 
 
+def clip_box(p, w, h):
+    """[x1, y1, x2, y2, *rest] clipped to [0, w] x [0, h]; extra fields (score) are kept."""
+    return [min(max(p[0], 0.0), w), min(max(p[1], 0.0), h), min(max(p[2], 0.0), w), min(max(p[3], 0.0), h), *p[4:]]
+
+
+def clip_preds(pred_dict, gt_dict):
+    """{stem: dets} with every det clipped to its image; stems without width/height in gt_dict are left as they are."""
+    out = {}
+    for stem, dets in pred_dict.items():
+        item = gt_dict.get(stem) or {}
+        w, h = item.get("width"), item.get("height")
+        out[stem] = [clip_box(p, float(w), float(h)) for p in dets] if (w and h) else dets
+    return out
+
+
 def match_image(preds, gts, iou_thr=IOU_THR):
     """Greedy one-to-one matching. preds: [[x1,y1,x2,y2,score]], sorted desc by score inside.
     Returns list of (score, is_tp) for every prediction and the number of GT."""
@@ -64,11 +82,15 @@ def match_image(preds, gts, iou_thr=IOU_THR):
 
 
 def collect(pred_dict, gt_dict, stems=None, iou_thr=IOU_THR):
-    """Flatten matches over images -> (scores, tps, n_gt)."""
+    """Flatten matches over images -> (scores, tps, n_gt). Predictions are clipped to the image first."""
     scores, tps, n_gt = [], [], 0
     for stem in (stems if stems is not None else gt_dict.keys()):
-        gts = gt_dict[stem]["boxes"]
+        item = gt_dict[stem]
+        gts = item["boxes"]
         preds = pred_dict.get(stem, [])
+        w, h = item.get("width"), item.get("height")
+        if w and h:
+            preds = [clip_box(p, float(w), float(h)) for p in preds]
         m, n = match_image(preds, gts, iou_thr)
         n_gt += n
         for s, tp in m:

@@ -2,6 +2,36 @@
 
 GPR B-scan 双曲线检测：HBAT 参数化标注 + 双曲线带掩码显式监督注意力分支。当前处于大修（major revision）阶段。
 
+**本页是唯一入口**：先在下表找到要看的文档，不用逐个翻 README。
+
+## 找东西：看哪个文件
+
+| 想知道 | 看这里 |
+|---|---|
+| **现在的结论、下一步做什么** | [experiments/revision/basic_ds2/README.md](experiments/revision/basic_ds2/README.md) 开头"答案"和"下一步" |
+| 大修各实验的状态（审稿意见 → 实验 → 做到哪了） | [experiments/revision/README.md](experiments/revision/README.md) |
+| 审稿意见逐条分析、修改计划、自查发现 S1–S5 | [paper/revision/revision_map.md](paper/revision/revision_map.md) |
+| basic_ds2 某一轮（Round 1–19）具体怎么做的 | [experiments/revision/basic_ds2/rounds.md](experiments/revision/basic_ds2/rounds.md) |
+| basic_ds2 的代码、结果目录、生成的汇总文件对应哪轮 | [basic_ds2/README.md 附录 B](experiments/revision/basic_ds2/README.md#附录-b文件与数据位置) |
+| 在新机器上复现 / 续跑 | [basic_ds2/README.md 附录 D](experiments/revision/basic_ds2/README.md#附录-d在新机器上复现--续跑) |
+| 数据导出、统一评估口径、检测器对比 | [experiments/revision/detector_comparison/README.md](experiments/revision/detector_comparison/README.md) |
+| YOLOv8 + band 辅助监督（插件实验） | [experiments/revision/yolo_band_ds2/README.md](experiments/revision/yolo_band_ds2/README.md) |
+| 投稿版论文每张表 / 图来自哪个脚本、哪次运行 | [experiments/submission/README.md](experiments/submission/README.md) |
+| 数据集来源、目录、标注格式 | [data/README.md](data/README.md) |
+| 分组划分（5 折、固定测试集） | [data/splits/README.md](data/splits/README.md)（生成文件） |
+| 标注工具 HBAT 用法 | 下方目录结构 `tools/annotation/hbat.py` 一行 |
+
+`runs*/` 下面的 `summary.md`、`sweep.md`、`cv_summary.md` 等都是脚本自动生成的结果表，不是文档，不要手改；它们由哪个脚本、哪一轮生成，见各实验 README 的"文件位置"附录。
+
+## 写文档的约定
+
+- 每个实验目录只放**一个** `README.md`：开头几行给答案 → 术语表 → 一页总览 → 下一步 → 附录（代码、结果、复现）。按时间线的逐轮记录超过几百行时拆到同目录的 `rounds.md`。
+- 当前结论**只写在 basic_ds2 README 开头一处**；其他文档只放链接，不复制数字（避免改一处漏一处）。
+- 正式数字只认标为"正式结果"的那一节；标了"已取代"的不要引用。
+- 术语用英文（baseline、arm、fold、recall、box refinement 等），README 开头放术语表。
+- 结果目录里的 `*.pth / *.pt / *.png / *.jpg / *.npz` 不入库（.gitignore）；重跑脚本可以再生成。
+- 运行环境：本机 `C:/Users/79152/.conda/envs/gpr/python.exe`（torch 2.10 + cu128，ultralytics 8.4.70）；IWAC1 / IWAC2（RTX 5090，conda `gpr`，torch 2.11 + cu128）。
+
 ## 目录结构
 
 ```
@@ -41,20 +71,16 @@ tools/
   visualize_yolo_labels.py     标签可视化
   git_batch_upload.py          分批 git 提交上传
 
-experiments/                 实验代码与结果。导航见 experiments/README.md；每个实验目录内：README.md = 文档（结论在最前），*.py = 代码，runs*/ = 结果与日志
-  submission/                投稿版实验（代码冻结，只读；对应论文各表，见 experiments/submission/README.md）
+experiments/                 实验代码与结果。每个实验目录：README.md = 文档，*.py = 代码，runs*/ = 结果与日志
+  submission/                投稿版实验（代码冻结，只读）→ experiments/submission/README.md
     primary_yolohead/          主数据集，YOLO 式检测头，640 输入 → Table II / III / Fig. 4
     additional_centernet/      第二数据集，CenterNet 热图头，224 输入 → Table IV
     cross_dataset/             跨数据集 → Table V
     explore/                   探索分支，未进论文（已删模型权重和可视化图）
-      0409_early/              早期探索（旧绝对路径和旧标注，仅供参考，不能直接运行）
-      0624_backbones/          ResNet / VGG / EfficientNet / MobileNet 骨干
-      0706_param_regression/   双曲线参数回归、关键点、Hough 拟合基线
-      0728_hparam_primary/     主数据集 HBAT 标注上的 λ / LR 搜索
-      yolo_ultralytics/        ultralytics YOLO 训练流程
-  revision/                  大修阶段实验（见 experiments/revision/README.md）
+  revision/                  大修阶段实验 → experiments/revision/README.md
     detector_comparison/       共享的数据导出 + 统一评估 + 完整检测器对比 / 带监督插件（实验 3）
-    basic_ds2/                 基础实验重跑：数据集 2 新标注、干净协议（结论见其 README §0）
+    basic_ds2/                 基础实验重跑：数据集 2 新标注、干净协议（README = 结论；rounds.md = 逐轮记录）
+    yolo_band_ds2/             YOLOv8s + band 辅助监督
 
 paper/
   manuscript/                  投稿版（JSTARS-2026-06074）：2main.tex + 1references.bib + 图；修改稿在此基础上改
@@ -63,35 +89,6 @@ paper/
 
 _待确认/                      不确定是否还需要的文件，见下文
 ```
-
-## 论文表格 / 图 ↔ 代码与结果（按 paper/manuscript/2main.tex 编号）
-
-| 论文 | 代码 | 结果 | 核对情况 |
-|---|---|---|---|
-| Table II（训练比例 0.5–0.9） | `experiments/submission/primary_yolohead/band_attention.py` | 0.7 行：`paper/figure_scripts/lambda_boxplot/merged_results-06281917.csv` | 只有 0.7 行找到一致的结果；0.5/0.6/0.8/0.9 行在现有 CSV 中均未找到 |
-| Table III（注意力模块对比） | `experiments/submission/primary_yolohead/generic_attention_baselines.py` | `runs/attn_cnn_yolo_attnblocks_0629_0737`（训练比例 0.8） | 四个模块一致（个别 std 末位差 0.01）；“This work”行取自 Table II 0.8 行 |
-| Table IV（第二数据集） | `experiments/submission/additional_centernet/centernet_band_attention.py` | 0.5 行：`runs/attn_cnn_merged_final_0731_0912`；0.7 行：`runs/attn_cnn_merged_final_0729_1127` | 一致；两行来自两次不同运行 |
-| Table V（跨数据集，训练比例 0.5） | `experiments/submission/cross_dataset/cross_dataset.py` | `runs/attn_cnn_cross_dataset_0731_1005` | **Baseline 与 This work 两行写反**（见下文） |
-| Fig. 4（六个场景注意力图） | `experiments/submission/primary_yolohead/band_attention_vis*.py` | 论文用图在 `paper/manuscript/fig/` | 生成该图的具体运行未确认 |
-| Fig. 5（Grad-CAM） | 同上 | 论文用图在 `paper/manuscript/` | 生成该图的具体运行未确认 |
-| Fig. 6（λ 箱线图） | `paper/figure_scripts/lambda_boxplot/plot_boxplot_lam.py` | `merged_results-06281917.csv` | 论文引用 `boxplot_f1_none_vs_abs_lam2.pdf`，脚本输出名是 `..._lam.pdf`，`lam2` 版本的生成方式未找到 |
-
-### Table V 行标签写反
-
-`cross_dataset_results.csv` 中按 `mode` 汇总（10 个 seed）：
-
-| 方向 | mode=none（baseline） P / R / F1 | mode=abs（本文） P / R / F1 |
-|---|---|---|
-| Primary→Additional | 0.260 / 0.080 / 0.114 | 0.271 / 0.090 / 0.125 |
-| Additional→Primary | 0.116 / 0.142 / 0.124 | 0.117 / 0.166 / 0.135 |
-
-论文把 abs 的数字填在了 Baseline 行。两个方向上本文方法实际都略好（F1 +0.01），但差距在一个标准差以内。审稿意见 R2-7 引用了这张表。
-
-## 已知问题（修改稿需处理）
-
-- 数据泄漏：现有划分按图片随机打乱，同一原图的增强副本会同时进入训练集和测试集。另外，不同文件名之间也存在同一场景或同一剖面的重复。需要用 `tools/data_audit/source_clusters.py` 聚类后按来源分组划分。
-- 主数据集实验与第二数据集 / 跨数据集实验用的是不同检测头、输入尺寸和 epoch。
-- Table II/III 用 `selected_318_bbox` 标注，Table V 用 `selected_318_hbat` 标注。
 
 ## _待确认
 

@@ -128,11 +128,19 @@ class PreparedDataset(Dataset):
         return len(self.stems)
 
     def __getitem__(self, idx):
+        return self.encode(idx, flip=False)
+
+    def encode(self, idx, flip=False):
+        """flip = True：几何水平翻转（图、框 x → W − x、band mask 一起翻），之后再编码目标。
+        2026-11-21 修 bug：原来的 augment_sample 在编码之后把热图 / offset 当数组翻转，目标落在 27 − fx 格，
+        真实位置是 28 − fx 格，每个翻转样本的目标都向左偏 8 px（第 4–16 轮所有 --augment run 都受影响）。"""
         stem = self.stems[idx]
         img = Image.open(self.files[stem]).convert("L")
         ow, oh = img.size
         img = img.resize((self.input_w, self.input_h), Image.BILINEAR)
         img_np = np.array(img, dtype=np.float32) / 255.0
+        if flip:
+            img_np = img_np[:, ::-1].copy()
         sx, sy = self.input_w / ow, self.input_h / oh
 
         hm = np.zeros((self.gh, self.gw), np.float32)
@@ -140,6 +148,8 @@ class PreparedDataset(Dataset):
         off = np.zeros((2, self.gh, self.gw), np.float32)
         peak = np.zeros((self.gh, self.gw), np.float32)
         for x1, y1, x2, y2 in self.gt[stem]["boxes"]:
+            if flip:
+                x1, x2 = ow - x2, ow - x1
             bw, bh = (x2 - x1) * sx, (y2 - y1) * sy
             cx, cy = x1 * sx + bw / 2.0, y1 * sy + bh / 2.0
             fx, fy = cx / HM_STRIDE, cy / HM_STRIDE
@@ -153,6 +163,8 @@ class PreparedDataset(Dataset):
         if m.shape != (self.input_h, self.input_w):
             m = cv2.resize(m, (self.input_w, self.input_h), interpolation=cv2.INTER_NEAREST)
         band_full = (m > 127).astype(np.float32)
+        if flip:
+            band_full = band_full[:, ::-1].copy()
         if (self.attn_h, self.attn_w) == (self.input_h, self.input_w):
             band = band_full          # 第 16 轮：attention 在输入分辨率上监督，不缩小、不重新二值化
         else:
@@ -172,8 +184,11 @@ def collate(batch):
             torch.stack(pks), torch.stack(bands), list(metas))
 
 
+FLIP_LEGACY = False   # --flip-legacy：复现第 4–16 轮的旧翻转（有 8 px 的 bug），只为对照旧结果
+
+
 def augment_sample(img, hm, wh, off, peak, band):
-    """原脚本自带的训练增强：只有水平翻转（标签同步翻转，x 偏移取负）。"""
+    """原脚本自带的训练增强（有 bug，只在 --flip-legacy 时用）：编码后把标签当数组翻转、x 偏移取负，目标向左偏 1 格 = 8 px。"""
     if random.random() < 0.5:
         img = torch.flip(img, dims=[2]); hm = torch.flip(hm, dims=[2]); wh = torch.flip(wh, dims=[2])
         peak = torch.flip(peak, dims=[2]); band = torch.flip(band, dims=[2]); off = torch.flip(off, dims=[2])
@@ -182,7 +197,7 @@ def augment_sample(img, hm, wh, off, peak, band):
 
 
 class AugWrapper(Dataset):
-    """只包训练集：每次取样随机做 augment_sample（meta 不变）。"""
+    """只包训练集：每次取样以 0.5 概率水平翻转（默认几何翻转；--flip-legacy 时用旧的数组翻转）。"""
 
     def __init__(self, ds):
         self.ds = ds
@@ -191,9 +206,12 @@ class AugWrapper(Dataset):
         return len(self.ds)
 
     def __getitem__(self, idx):
-        img, hm, wh, off, peak, band, meta = self.ds[idx]
-        img, hm, wh, off, peak, band = augment_sample(img, hm, wh, off, peak, band)
-        return img, hm, wh, off, peak, band, meta
+        if FLIP_LEGACY:
+            img, hm, wh, off, peak, band, meta = self.ds[idx]
+            img, hm, wh, off, peak, band = augment_sample(img, hm, wh, off, peak, band)
+            return img, hm, wh, off, peak, band, meta
+        # 和旧版本一样每个样本取一次 random.random()（编码本身不用 random），所以每个样本翻不翻和旧 run 相同
+        return self.ds.encode(idx, flip=random.random() < 0.5)
 
 
 # ───────────────────────── 模型（原样） ─────────────────────────
@@ -490,13 +508,16 @@ def main():
     ap.add_argument("--mask-dir", default="masks_band")
     ap.add_argument("--attn-head", default="conv", choices=["conv", "unet"],
                     help="conv=原样(f3 上一个 3×3 卷积，56×56)；unet=U 形解码到 224×224，全分辨率监督(第 16 轮)")
-    ap.add_argument("--augment", action="store_true", help="训练集水平翻转增强（原脚本自带的那一种）")
+    ap.add_argument("--augment", action="store_true", help="训练集水平翻转增强（几何翻转，2026-11-21 修过 8 px 的 bug）")
+    ap.add_argument("--flip-legacy", action="store_true", help="用第 4–16 轮的旧翻转（目标偏 8 px 的 bug），只为复现旧结果")
     ap.add_argument("--runs", default=str(HERE / "runs"))
     ap.add_argument("--fold-in-path", action="store_true", help="run 目录名带折号：f<fold>_seed<k>（5 折实验用）")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--pred-thresh", type=float, default=0.001)
     ap.add_argument("--pred-max-det", type=int, default=50)
     args = ap.parse_args()
+    global FLIP_LEGACY
+    FLIP_LEGACY = args.flip_legacy   # 在建 DataLoader 之前设好（Linux fork 的 worker 会继承）
 
     exp = args.exp or f"basic_{args.mode}"
     data_dir = Path(args.data)
@@ -559,7 +580,9 @@ def main():
                 pretrained=False, mode=args.mode, lam_att=args.lam_att if args.mode == "abs" else None, fuse=args.fuse,
                 oracle_band=(args.mode == "oracle"), det_stride=args.det_stride, attn_head=args.attn_head, attn_stride=ATTN_STRIDE,
                 train_frac=args.train_frac, n_train=len(tr),
-                mask_dir=args.mask_dir, augment=args.augment, box_source=manifest.get("box_source"), fold=fold,
+                mask_dir=args.mask_dir, augment=args.augment,
+                flip=("legacy (array flip, 8 px bug)" if args.flip_legacy else "geometric (fixed 2026-11-21)") if args.augment else None,
+                box_source=manifest.get("box_source"), fold=fold,
                 paired_init=True, init_fingerprint=fingerprint,
                 imgsz=INPUT_SIZE[0], epochs=args.epochs, batch=BATCH, lr=LR, optimizer="Adam",
                 amp="bfloat16", model_selection="last epoch (no val-based selection, same as the paper script)",
