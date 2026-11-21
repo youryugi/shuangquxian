@@ -107,6 +107,10 @@ def main():
     ap.add_argument("--data", required=True)
     ap.add_argument("--exp", required=True)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--run-name", default=None, help="sub-directory under <runs>/<dataset>/<exp>/ (default seed<k>; "
+                    "the 5-fold runner uses f<fold>_seed<k>, the layout basic_ds2/aggregate_cv.py reads)")
+    ap.add_argument("--weights", default="best", choices=["best", "last"],
+                    help="best = highest val AP50 (default); last = final epoch, no val-based selection (5-fold protocol)")
     ap.add_argument("--scratch", action="store_true", help="no COCO / ImageNet weights")
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--imgsz", type=int, default=640)
@@ -122,7 +126,7 @@ def main():
     data_dir = Path(args.data).resolve()
     manifest = json.load(open(data_dir / "manifest.json", encoding="utf-8"))
     dataset = manifest["dataset"]
-    run_dir = Path(args.runs).resolve() / dataset / args.exp / f"seed{args.seed}"
+    run_dir = Path(args.runs).resolve() / dataset / args.exp / (args.run_name or f"seed{args.seed}")
     (run_dir / "train").mkdir(parents=True, exist_ok=True)
     set_seed(args.seed)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -177,7 +181,8 @@ def main():
         json.dump(log, f, indent=1)
     train_minutes = (time.time() - t0) / 60
 
-    model.load_state_dict(torch.load(run_dir / "train" / "best.pt", map_location=device))
+    if args.weights == "best":
+        model.load_state_dict(torch.load(run_dir / "train" / "best.pt", map_location=device))
     for phase, ds in (("val", val_ds), ("test", test_ds)):
         with open(run_dir / f"preds_{phase}.json", "w", encoding="utf-8") as f:
             json.dump(predict(model, ds, device), f)
@@ -193,7 +198,11 @@ def main():
         gflops = round(fc.get_total_flops() / 1e9, 2)
     except Exception as e:
         print("FLOPs count failed:", e)
-    info = dict(dataset=dataset, exp=args.exp, seed=args.seed, model="fasterrcnn_resnet50_fpn_v2",
+    info = dict(dataset=dataset, exp=args.exp, seed=args.seed, fold=manifest.get("fold"),
+                box_source="hbat" if manifest.get("box_source") == "hbat" else "official",
+                model_selection=("last epoch (no val-based selection)" if args.weights == "last"
+                                 else "best val AP50"),
+                model="fasterrcnn_resnet50_fpn_v2",
                 pretrained=pretrained, band=False, framework=f"torchvision {torchvision.__version__}",
                 torch=torch.__version__, imgsz=args.imgsz, epochs=args.epochs, batch=args.batch,
                 train_minutes=round(train_minutes, 2), params_M=round(n_params, 3), GFLOPs=gflops,
