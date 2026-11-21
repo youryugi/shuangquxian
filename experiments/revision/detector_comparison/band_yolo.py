@@ -284,7 +284,55 @@ class BandTrainer(DetectionTrainer):
         cv2.imwrite(str(self.save_dir / f"train_batch{ni}_band.jpg"), cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
 
 
-def train_band(overrides: dict, band: dict | None = None):
-    trainer = BandTrainer(overrides=overrides, band=band)
+def train_band(overrides: dict, band: dict | None = None, trainer_cls=None):
+    trainer = (trainer_cls or BandTrainer)(overrides=overrides, band=band)
     trainer.train()
     return trainer
+
+
+# ----------------------------------------------------------------------------- band output at test time
+def _letterbox(im, imgsz, pad_value=114):
+    """Same geometry as ultralytics LetterBox(auto=False, center=True): resize long side to imgsz, pad to a square."""
+    h0, w0 = im.shape[:2]
+    r = min(imgsz / h0, imgsz / w0)
+    nw, nh = int(round(w0 * r)), int(round(h0 * r))
+    if (nw, nh) != (w0, h0):
+        im = cv2.resize(im, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    top, left = int(round((imgsz - nh) / 2 - 0.1)), int(round((imgsz - nw) / 2 - 0.1))
+    out = np.full((imgsz, imgsz, 3), pad_value, dtype=np.uint8)
+    out[top:top + nh, left:left + nw] = im
+    return out, (top, left, nh, nw)
+
+
+@torch.no_grad()
+def predict_band(net, img_paths, imgsz, device):
+    """Run the aux head on each image. Returns {stem: uint8 probability map (0..255) at the ORIGINAL image size}.
+
+    The detection outputs are ignored here (they are exported separately by model.predict); this only reads the
+    feature map the aux head is attached to. Used to measure band quality (band IoU, as in basic_ds2 Round 16) and,
+    later, to turn the predicted band into boxes (basic_ds2 Round 12 / 15 style)."""
+    net = net.to(device).eval()
+    dtype = next(net.parameters()).dtype
+    out = {}
+    for p in img_paths:
+        p = Path(p)
+        im = imread(str(p), flags=cv2.IMREAD_COLOR)
+        h0, w0 = im.shape[:2]
+        lb, (top, left, nh, nw) = _letterbox(im, imgsz)
+        x = torch.from_numpy(np.ascontiguousarray(lb[..., ::-1].transpose(2, 0, 1))).to(device, dtype)[None] / 255.0
+        net(x)
+        logit = net.aux_head(net._aux_feat)
+        prob = torch.sigmoid(F.interpolate(logit.float(), size=(imgsz, imgsz), mode="bilinear", align_corners=False))
+        prob = prob[0, 0, top:top + nh, left:left + nw].cpu().numpy()
+        if prob.shape != (h0, w0):
+            prob = cv2.resize(prob, (w0, h0), interpolation=cv2.INTER_LINEAR)
+        out[p.stem] = np.clip(prob * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    net._aux_feat = None
+    return out
+
+
+def band_counts(pred_u8, gt_u8, t=0.5):
+    """Pixel counts for pooled band IoU / precision / recall (pool by summing over images, as diag_band_quality.py)."""
+    p = pred_u8 >= int(round(t * 255))
+    g = gt_u8 > 127
+    return {"inter": int((p & g).sum()), "union": int((p | g).sum()), "pred": int(p.sum()), "gt": int(g.sum())}

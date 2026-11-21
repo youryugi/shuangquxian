@@ -1,105 +1,154 @@
-# 基础实验重跑（数据集 2，新标注）：attention supervision 到底有没有用
+# 基础实验重跑（数据集 2，新标注）：band 监督到底有没有用
 
-**要回答的问题**：论文说"用 hyperbola band mask 监督 attention，检测 F1 从 0.67 升到 0.73"（Table IV）。换上重新标注的数据，用更严格的实验方法再跑一遍，这个提升还在吗？
+**问题**：论文 Table IV 说"用 hyperbola band mask 监督 attention，检测 F1 从 0.67 升到 0.73"。换上重新标注的数据、用严格的实验方法重跑，这个提升还在吗？如果不在，band 标注还有什么价值？
 
-**答案（截至 2026-11-15 晚，Round 4–10 全部跑完）**：**基本不在。** 严格方法下 +attention 的 ΔF1 在两次硬件复现里分别是 +0.004 [−0.021, +0.028]（5060 Ti）和 +0.019 [+0.004, +0.035]（5090），也就是 0.47 → 0.49 这个量级；换一块显卡重跑同一配置本身就能让一个 arm 动 ±0.013，所以这个量级的效应没有稳健的证据。原来论文的 +0.06 是实验方法有漏洞造成的。把**人工标注的真实 band** 送进 fusion 也只有 +0.03（Round 7）、换成 extent features 也只有 +0.04（Round 8）：现有 fusion 通路的上限就这么高，而同一份 band 用在 post-processing 上能到 +0.11（Round 6）。λ、gate、stride 4、数据量都不能把差距拉大（Round 8–10）。分层分析（Round 11）显示这 +0.02 来自多检出约 5 个孤立目标，框的大小和严格 IoU 下的定位完全没变；真实 band 的收益则集中在窄目标和成簇目标，正是 band 预测最差的地方。
+**答案（截至 2026-11-16，Round 16）**
 
-**把 band 用对地方之后（Round 12）**：让 attention map 里的 band 直接决定框的范围（推理时一步，参数只在验证集上选），F1 从 0.473 到 **0.545**，ΔF1 = +0.072 [+0.059, +0.086]，10 个 seed 全胜，F1@IoU0.7 也从 0.165 到 0.242。其中约 +0.03 用"把 baseline 的框统一放大 5%"也能拿到，band 特有的部分是 **+0.043 [+0.030, +0.059]**，集中在宽的、孤立的双曲线上；成簇目标没有改善。真实 band 的上限 0.589–0.602。这是目前唯一能写进主表、且在严格协议下站得住的 attention 效果。
+1. **论文的 +0.06 不在。** 严格协议下 +attention 的 ΔF1 是 +0.004（5060 Ti）/ +0.019（5090），和"换一块显卡"带来的差别同量级。原来的提升来自 data leakage 和没对齐的初始化。
+2. **把 band 用在 box refinement 上有效，但大部分不是 band 形状的功劳。** baseline 0.473 → 0.545（+0.072，10/10 seeds）；同结构只用框标注的 box-mask control 拿到其中的 +0.046，band 形状特有的只有 +0.025。
+3. **不用 band、只加一个 stage 2 框回归就是 +0.159，超过所有用 band 的方案。** band 形状唯一替代不了的地方在 grouped targets（相邻双曲线成簇）：band 准确时 recall 比框回归高 0.10。但预测出来的 band 不够准（测试图 band IoU 0.42），受限于训练数据量，不是网络结构。
 
-**但其中有多少是 band 形状的功劳（Round 13）**：把 attention 头的监督换成**填实的 HBAT 框**（只需框标注，没有任何 band 形状），其余完全相同、也做同样的 mask → 框步骤：F1 0.473 → 0.502（fusion，+0.029，比 band 的 +0.019 还大一点）→ 0.519（定框再加 +0.018 [−0.004, +0.039]，6 胜 4 负）。所以 +0.072 里有 +0.046 用框标注加一个稠密头就能拿到，**band 形状特有的部分是 +0.025 [+0.002, +0.046]，7 胜 3 负，Wilcoxon p = 0.11**，集中在宽目标（recall +0.092）。band 的实际优势在定框步骤的稳健性：band 的 union 模式 20 组参数全部有效，框掩码只有 9/20，而且框掩码定框完全没有把"框画小了"的目标救回来。论文里"band 标注优于框标注"只能写成方向性的、0.02–0.03 量级的主张，并和 band 的额外标注成本放在一起。
-
-**按每条双曲线做 attention（Round 14，2026-11-16）**：顺着"整张图上没有一个尺度适合所有双曲线"的思路，把每个候选框裁出来、缩放到同一尺寸，在窗口上做 band attention 再修正框。结果：**第二阶段本身是全项目最大的提升，baseline 0.473 → 0.632（+0.159 [+0.137, +0.178]，10/10 胜），而且只需要框标注；band 监督在它上面没有额外作用**——比只做框回归的对照高 +0.012 [−0.001, +0.024]，和同结构但不监督的对照相比是 −0.001。事先约定的判断规则（CI 不含 0 且 > +0.025）没有满足。不用 band 的第二阶段比 Round 12 的方法（0.545）高 +0.088，也高于"真实 band 定框"的上限（0.589 / 0.602）：baseline 框画不准是第一阶段结构的问题，普通的框回归阶段就能修，**"band 告诉了框该多大"这个解释不再站得住**。尺度归一化确实让 band 预测不再随目标大小变化，但回归网络直接从图像学到的和从预测 band 里读到的一样多。剩下的瓶颈是成簇目标（93 个，recall 0.453 → 0.453）。
-
-**band 形状唯一不可替代的地方（Round 15）**：沿 band 给每个检测拟合一条双曲线（顶点 + slope），代替"按框中心最近"的切分。band 完全正确时，这个规则比原规则高 +0.069（0.589 → 0.658，10/10 胜），和**同一个第一阶段上**不用 band 的第二阶段相比，总的 F1 打平（0.658 对 0.656，+0.002 [−0.009, +0.017]），但**成簇目标的 recall 高 +0.100 [+0.068, +0.129]（0.474 → 0.574，9/1）**、严格定位更好（F1@IoU0.7 +0.041，10/0），单目标图上 FP 更多——框回归分不开交叉的双曲线，沿曲线走可以。但用现在预测出来的 band，新规则反而更差（0.530 对 0.545）。
-
-**把 band 预测好（Round 16）**：attention 头换成 U 形解码、在 224×224 上输出和监督。训练图上 band IoU 从 0.54 到 0.76，测试图上只从 0.38 到 0.42——**限制 band 质量的是数据量（每折 91 张训练图），不是分辨率或网络结构**；Round 9、14 的结果指向同一件事（三种设计的测试 band IoU 都在 0.38–0.48）。检测没有实质变化：拟合定框 0.530 → 0.549，追平 Round 12 的方法；band 相对框掩码的优势仍是 0.02–0.04（同一规则 +0.036 [+0.017, +0.054]，两边各取最好的规则 +0.027 [−0.001, +0.060]）。
-
-**现在的整体判断**：在数据集 2 上，"预测出来的 band"在三种用法下（fusion、定框、按目标的 attention）都没有超过不用 band 的做法；band 形状有价值的证据只在 band 准确时成立（成簇目标）。要把它变成现实需要更多带 band 标注的数据。
-
-**最重要的待办**：在数据集 1（论文主数据，170 张原图）上用同样的严格方法再跑一次，同时把"baseline + 第二阶段框回归"作为对照一起跑，然后决定论文的主张怎么改。
-
----
-
-## 术语表
-
-本文中的专业词统一用英文，含义如下。
-
-| 术语 | 含义 |
-|---|---|
-| **baseline** | 只有检测头的模型，不加 attention |
-| **+attention** | 检测头 + attention 分支，attention 用 band mask 监督（即论文方法） |
-| **arm** | 对比实验中的一组。本文只有两组：baseline arm 和 +attention arm |
-| **band / band mask** | 沿双曲线画出的一条带状区域，用作 attention 的监督目标 |
-| **official box** | 数据集自带的标注框。经常把相邻的 2–4 条双曲线框成一个大框（scene-level） |
-| **HBAT box** | 由 HBAT 标注的 band 几何算出的框，一条双曲线一个框（instance-level） |
-| **box granularity mismatch** | 标注框和模型输出对"一个目标"的定义不一致：标注是一个大框套多条，模型是一条一个小框。小框和大框的 IoU 不到 0.5，于是被判成 false positive |
-| **fold / 5-fold CV** | 5-fold cross-validation：把 131 张图分成 5 份，轮流用其中 1 份做测试。**single fold** 指只跑了其中一份（fold 0），测试集只有 27 张 |
-| **seed** | 随机种子。同一配置换不同 seed 重跑，用来估计随机波动 |
-| **paired initialization** | 两个 arm 用同一个 seed 时，检测部分的初始权重逐个参数完全相同，这样两者的差值只反映 attention 本身的作用 |
-| **data leakage** | 测试图的"近亲"（同一张原图的增强版本）出现在训练集里，模型等于提前见过答案 |
-| **TP / FP / FN** | true positive（检对）/ false positive（误检，报了不存在的目标）/ false negative（漏检，没检出真实目标） |
-| **precision / recall** | precision = TP /（TP + FP）；recall = TP /（TP + FN） |
-| **score threshold** | 模型输出分数高于这个值才算检出。在 validation set 上选，然后用在 test set 上 |
-| **box regression** | 网络预测框的位置和宽高的那一部分 |
-| **post-processing** | 网络输出之后、不需要重新训练的处理步骤（例如 NMS） |
-| **upper bound (oracle)** | 用人工标注的真值代替网络预测，得到的理论最好成绩 |
-| **receptive field** | 网络某一层的一个输出格子能"看到"的输入图像范围（像素），由卷积核大小和 pooling 次数决定 |
-| **stride** | 特征图相对输入图的缩小倍数。stride 8 = 224 的图变成 28×28；stride 4 = 56×56 |
-| **fusion** | 把 attention map 和检测特征合并的那一步。concat = 拼接成多一个通道；gate = 特征乘以 (1 + attention) |
-| **extent features** | Round 8 新加的 4 个通道：在 attention map 上用水平 / 竖直的 box filter 算"band 在这附近延伸了多宽"，直接喂给检测头 |
-| **λ (lam_att)** | attention loss 的权重，总 loss = 检测 loss + λ × attention loss，论文默认 0.7 |
+**下一步**：① 论文怎么面对 stage 2 这个更强的对照，**需要你决定**；② 数据集 1 用同一协议重跑（等 band 标注补齐）。详见[下一步](#下一步)。
 
 ---
 
 ## 目录
 
+- [术语表](#术语表)
+- [结论是怎么一步步变的](#结论是怎么一步步变的)
 - [一页总览](#一页总览)
-- [Round 1：标注文件用错，作废](#round-1标注文件用错作废)
-- [Round 2：新标注 + official box，single fold](#round-2新标注--official-boxsingle-fold)
-- [Round 3：换 HBAT box + 水平翻转增强，3 seeds](#round-3换-hbat-box--水平翻转增强3-seeds)
-- [Round 4：paired initialization + 5-fold + 10 seeds（正式结果）](#round-4paired-initialization--5-fold--10-seeds正式结果)
-- [Round 5：诊断为什么没有提升](#round-5诊断为什么没有提升)
-- [Round 6：用 band 修正框，验证诊断](#round-6用-band-修正框验证诊断)
-- [Round 7–10 之前：三个假设的分析](#round-710-之前三个假设的分析)
-- [Round 7：upper bound 诊断，真实 band 直接做 fusion](#round-7upper-bound-诊断真实-band-直接做-fusion)
-- [Round 8：把尺寸信息做进网络](#round-8把尺寸信息做进网络)
-- [Round 9：数据量曲线](#round-9数据量曲线)
-- [Round 10：λ 扫描 + gate fusion](#round-10λ-扫描--gate-fusion)
-- [Round 11：分层分析——attention 帮了哪类目标](#round-11分层分析attention-帮了哪类目标)
-- [Round 12：band → 框尺寸做进推理](#round-12band--框尺寸做进推理)
-- [Round 13：box-mask 对照——收益来自稠密头还是 band 的形状](#round-13box-mask-对照收益来自稠密头还是-band-的形状)
-- [Round 14：按每条双曲线做 band attention（第二阶段）](#round-14按每条双曲线做-band-attention第二阶段)
-- [Round 15：用双曲线的形状把成簇目标分开（拟合定框）](#round-15用双曲线的形状把成簇目标分开拟合定框)
-- [Round 16：整图上把 band 预测好（全分辨率 attention 头）](#round-16整图上把-band-预测好全分辨率-attention-头)
+- 阶段 A：复现
+  - [Round 1：标注文件用错，作废](#round-1标注文件用错作废)
+  - [Round 2：新标注 + official box，single fold](#round-2新标注--official-boxsingle-fold)
+  - [Round 3：HBAT box + 水平翻转，3 seeds](#round-3hbat-box--水平翻转3-seeds)
+  - [Round 4：严格协议（正式结果）](#round-4严格协议正式结果)
+- 阶段 B：找原因
+  - [Round 5：诊断为什么没有提升](#round-5诊断为什么没有提升)
+  - [Round 6：用 band 修正框，验证诊断](#round-6用-band-修正框验证诊断)
+  - [Round 7–10 之前：三个假设](#round-710-之前三个假设)
+  - [Round 7：真实 band 直接做 fusion（upper bound）](#round-7真实-band-直接做-fusionupper-bound)
+  - [Round 8：把尺寸信息做进网络](#round-8把尺寸信息做进网络)
+  - [Round 9：数据量曲线](#round-9数据量曲线)
+  - [Round 10：λ 扫描 + gate fusion](#round-10λ-扫描--gate-fusion)
+- 阶段 C：换一种用法
+  - [Round 11：分层分析，attention 帮了哪类目标](#round-11分层分析attention-帮了哪类目标)
+  - [Round 12：box refinement 做进推理](#round-12box-refinement-做进推理)
+  - [Round 13：box-mask control，有多少是 band 形状的功劳](#round-13box-mask-control有多少是-band-形状的功劳)
+- 阶段 D：找 band 不可替代的地方
+  - [Round 14：stage 2，按每条双曲线做 attention](#round-14stage-2按每条双曲线做-attention)
+  - [Round 15：hyperbola fit，用形状分开 grouped targets](#round-15hyperbola-fit用形状分开-grouped-targets)
+  - [Round 16：U-shaped decoder，把 band 预测好](#round-16u-shaped-decoder把-band-预测好)
 - [下一步](#下一步)
 - [附录 A：实验设置（正式协议）](#附录-a实验设置正式协议)
 - [附录 B：文件与数据位置](#附录-b文件与数据位置)
 - [附录 C：潜在问题清单](#附录-c潜在问题清单)
+- [附录 D：在新机器上复现 / 续跑](#附录-d在新机器上复现--续跑)
+
+---
+
+## 术语表
+
+专业词统一用英文，含义如下。
+
+**实验设计**
+
+| 术语 | 含义 |
+|---|---|
+| **baseline** | 只有检测头的模型，不加 attention |
+| **+attention** | 检测头 + attention 分支，attention 用 band mask 监督（论文方法） |
+| **arm** | 对比实验中的一组配置，例如 baseline arm、+attention arm |
+| **fold / 5-fold CV** | 131 张图按来源分成 5 份，轮流用 1 份做测试。**single fold** = 只跑 fold 0，测试集只有 27 张 |
+| **seed** | 随机种子。同一配置换 seed 重跑，用来估计随机波动 |
+| **paired initialization** | 两个 arm 用同一个 seed 时，检测部分的初始权重逐个参数相同，差值只反映 attention 本身的作用 |
+| **paired Δ / 95% CI / 胜/平/负** | 按 seed 配对的差值（B − A）的均值、bootstrap 置信区间、10 个 seed 里 B 赢 / 平 / 输的次数 |
+| **data leakage** | 测试图的"近亲"（同一张原图的增强版本）出现在训练集里 |
+| **hardware replication** | 同一代码、同一 seed 在两块显卡（5060 Ti / 5090）上各跑一次；浮点 kernel 不同，结果会有小差别 |
+| **upper bound / oracle** | 用人工标注的真值代替网络预测，得到的理论最好成绩 |
+| **control（对照）** | 为了排除另一种解释而设计的 arm，只改一处 |
+
+**数据与标注**
+
+| 术语 | 含义 |
+|---|---|
+| **band / band mask** | 沿双曲线画出的带状区域，attention 的监督目标 |
+| **official box** | 数据集自带的标注框，经常把相邻 2–4 条双曲线框成一个（scene-level） |
+| **HBAT box** | 由 HBAT 标注的 band 几何算出的框，一条双曲线一个（instance-level）。按定义就是 band 的外接矩形 |
+| **box granularity mismatch** | 标注框和模型对"一个目标"的定义不一致：一个大框套多条 vs 一条一个小框，IoU 不到 0.5，被判成 FP |
+| **grouped target** | official box 里还套着别的双曲线的目标，即相邻双曲线成簇（222 个里 93 个）。反义 **isolated**：official box 只套这一条 |
+| **narrow / medium / wide** | 按 GT 框宽度三分位：< 53 px / 53–80 px / ≥ 80 px |
+| **visibility / completeness / distortion** | HBAT 的目标标签：清晰度（clear / medium / weak）、完整度（both 两翼 / single 单翼 / apex 只有顶部）、形状（fit 符合双曲线 / deviates 偏离） |
+
+**指标**
+
+| 术语 | 含义 |
+|---|---|
+| **TP / FP / FN** | 检对 / 误检 / 漏检 |
+| **precision / recall / F1** | TP/(TP+FP) / TP/(TP+FN) / 两者调和平均。默认 IoU 0.5 匹配 |
+| **F1@IoU0.7** | 匹配要求 IoU ≥ 0.7 的 F1，衡量定位是否精确 |
+| **AP50** | IoU 0.5 下的 average precision，不依赖 score threshold |
+| **score threshold** | 分数高于它才算检出。在 validation set 上选，用在 test set 上 |
+| **near miss** | GT 的最佳 IoU 在 0.3–0.5：找到了但框画错（多数是画小了） |
+| **band IoU** | 预测 band 与真实 band 的 IoU，衡量 band 画得好不好 |
+
+**网络与方法**
+
+| 术语 | 含义 |
+|---|---|
+| **stride** | 特征图相对输入图的缩小倍数。stride 8 = 224 → 28×28；stride 4 = 56×56 |
+| **receptive field** | 某层一个输出格子能"看到"的输入范围（像素） |
+| **fusion** | 把 attention map 和检测特征合并的一步。**concat** = 拼成多一个通道；**gate** = 特征 × (1 + attention)；**extent** = 额外算 4 个"band 延伸多宽"的通道（Round 8） |
+| **λ (lam_att)** | 总 loss = 检测 loss + λ × attention loss，默认 0.7 |
+| **dense head** | 逐像素输出的头。attention head 就是一个 dense head |
+| **box regression** | 网络预测框位置和宽高的部分 |
+| **post-processing** | 网络输出之后、不需要重新训练的步骤（例如 NMS） |
+| **box refinement（band-to-box）** | 推理时用 attention map 里的 band 修正检测框的范围（Round 6、12） |
+| **union / replace / blend** | box refinement 的三种合并方式：新框 = 原框 ∪ band 外接框（只扩不缩）/ 直接用 band 外接框 / 两者坐标平均 |
+| **Voronoi split** | 把 band 像素分给离它最近的检测中心，用来切开相邻双曲线（Round 6、12） |
+| **hyperbola fit** | 沿 band 给每个检测拟合一条双曲线（顶点 + slope），取 band 支持的那一段作框，代替 Voronoi split（Round 15） |
+| **scale control** | 对照：把 baseline 的框绕中心统一放大 k 倍（k 在验证集上选） |
+| **box-mask control** | 对照：attention head 的监督换成**填实的 HBAT 框**。只需框标注，没有 band 形状（Round 13） |
+| **stage 2** | 第二阶段：每个候选框裁一个窗口、缩放到 96×96，在窗口上再回归一次框（Round 14）。五个 arm：**plain**（只回归框）/ **unsup**（有 attention 分支但不监督）/ **boxmask** / **band** / **oracle**（直接给真实 band） |
+| **U-shaped decoder（unet head）** | Round 16 的 attention head：逐级上采样、接 skip，在 224×224 上输出 |
+
+---
+
+## 结论是怎么一步步变的
+
+| 阶段 | Rounds | 要回答的问题 | 得到的答案 | 引出的下一个问题 |
+|---|---|---|---|---|
+| **A 复现** | 1–4 | 论文的 +0.06 还在吗？ | 不在。严格协议下 +0.004 / +0.019，和换显卡同量级 | 为什么没有？ |
+| **B 找原因** | 5–10 | 是分辨率、bug、λ、fusion 方式还是数据量的问题？ | 都不是主因。attention 学到了 band，但 fusion 通路只传过去一点（真实 band 走 fusion 也只 +0.03）；瓶颈是框画小了（near miss），而 fusion 解决不了这个 | band 直接用来定框行不行？ |
+| **C 换用法** | 11–13 | box refinement 有效吗？是不是 band 形状的功劳？ | 有效（+0.072，10/10）。但只用框标注的 box-mask control 拿到其中 +0.046，band 形状特有 +0.025 | band 形状有没有别的东西替代不了的价值？ |
+| **D 找不可替代处** | 14–16 | 按目标做 attention、按形状分开 grouped targets、把 band 预测好，能不能让 band 超过不用 band 的做法？ | 不用 band 的 stage 2 是 +0.159，超过所有 band 方案。band 形状唯一优势：band 准确时 grouped targets 的 recall +0.10。预测 band 的测试 IoU 停在 0.38–0.48，受数据量限制 | 更多带 band 标注的数据（数据集 1、合成数据）；论文主张怎么写 |
 
 ---
 
 ## 一页总览
 
-| Round | 日期 | 做了什么 | baseline F1 | +attention F1 | 结论 |
-|---|---|---|---|---|---|
-| 1 | 11-14 下午 | 误用了旧标注（HBAT 启动时没加 `--out`） | 0.42 | 0.41 | **作废** |
-| 2 | 11-14 晚 | 新标注、official box、single fold、1–3 seeds | 0.44 | 0.44 | 两个 arm 分数一样；比论文低 0.3；不同 seed 之间波动很大 |
-| 3 | 11-14 晚 | 改用 HBAT box（一条双曲线一个框）、开水平翻转增强，3 seeds | 0.52 | 0.57 | 整体分数上来了；看起来 +0.04，但只有 3 个 seed |
-| **4** | 11-14 深夜；11-15 在 5090 上重跑 | **paired initialization + 5-fold + 10 seeds** | **0.475 / 0.473** | **0.479 / 0.492** | **ΔF1 = +0.004 [−0.021, +0.028]（5060 Ti）/ +0.019 [+0.004, +0.035]（5090）。两次复现都在 0.02 以内，和换显卡带来的差别（+0.013）同量级。正式结果** |
-| 5 | 11-15 | 诊断：分辨率问题？代码 bug？瓶颈在哪？ | — | — | 瓶颈是 FN（漏检）；约 4 成 FN 是框画小了；attention 解决的不是这个问题 |
-| 6 | 11-15 | 用 attention map 里的 band 把框扩大（不重新训练） | 0.475 | **0.541** | band 的信息有用，但没进入 box regression。只是 post-processing，不进论文 |
-| 7 | 11-15 | upper bound：真实 band 直接送进 fusion（训练和 inference 都给） | 0.473 | 0.505（oracle） | **真实 band 走现有 concat fusion 只有 +0.032 [+0.019, +0.045]（9 胜 1 负）；学出来的 attention 拿到其中的 +0.019。通路的上限本身就低** |
-| 8 | 11-15 | 尺寸信息进网络：a) extent features fusion；b) 检测头搬到 stride 4 | 0.473 / 0.463 | 0.484 / 0.434 | a) +0.011 [−0.015, +0.034]，不比默认 concat 好；真实 band + extent 的上限 0.516（+0.043）。b) stride 4 反而变差（−0.029，seed 间方差翻倍）。**都没有把 Round 6 的 +0.11 变成网络自己的能力** |
-| 9 | 11-15 | 数据量曲线：训练集 25% / 50% | 0.263 / 0.390 | 0.242 / 0.395 | 数据减半 Δ = +0.005；只剩 1/4 时 Δ = −0.021 [−0.036, −0.008]（2 胜 8 负）。**数据越少 attention 监督越不帮忙，不是"小样本先验"** |
-| 10 | 11-15 | λ = 0.1 / 0.3 / 1.5 + gate fusion | 0.473 | 0.474 / 0.472 / 0.468 / 0.480 | λ 从 0.1 到 1.5，Δ 全在 [−0.005, +0.019] 之间、CI 都盖住 0；gate +0.007 [−0.012, +0.026]。**λ 和 fusion 方式都不是原因** |
-| 11 | 11-15 晚 | 分层分析：按 HBAT 标签 / 尺寸 / 图像上下文拆 recall，看定位质量（只读已有预测，不训练） | 0.473 | 0.492 | +0.019 来自多检出约 5 个目标（222 个里），precision 不降；集中在**单目标图、official box 只套一条双曲线、形状偏离理想双曲线**的目标；**框的大小和 IoU≥0.7 的定位完全没变**。真实 band 的 +0.032 集中在**窄目标**（recall +0.068）和成簇目标，恰是学出来的 attention 没拿到的部分 |
-| **12** | 11-15 晚 | **band → 框尺寸做进推理**：attention map 二值化成 band，沿 band 把框扩到整条弧（只扩不缩），参数在合并验证集上全局选；对照 = baseline 框统一放大 k 倍；上限 = 真实 band | 0.473 | **0.545** | **ΔF1 = +0.072 [+0.059, +0.086]，10/10 胜；F1@IoU0.7 0.165 → 0.242；AP50 +0.130**。统一放大 5% 的对照拿到 +0.029，band 特有 **+0.043 [+0.030, +0.059]**，来自宽的（≥80 px，recall +0.145）、孤立的目标；成簇目标 +0.02。真实 band 上限 0.589 / 0.602。60 组参数里 union 模式 20 组全部变好 |
-| **13** | 11-15 深夜 | **box-mask 对照**：attention 头用填实的 HBAT 框当监督（`--mask-dir masks_box`，没有 band 形状，只需框标注），其余和方法完全相同，含同样的 mask → 框步骤（60 组参数验证集选） | 0.473 | 0.502（fusion）/ 0.519（+ 定框） | fusion：+0.029 [+0.014, +0.044]，**比 band fusion 的 +0.019 还大**（两者差 +0.010，CI 盖 0）；定框只再加 +0.018 [−0.004, +0.039]（6/4）。**方法比 box-mask 对照高 +0.025 [+0.002, +0.046]，7/3，p = 0.11**。band 形状的价值在定框步骤：union 20 组全部有效 vs 9/20；"差一点"的目标 band 救回 4%，框掩码一个没救；宽目标 recall +0.092 |
-| **14** | 11-16 凌晨 | **按每条双曲线做 attention**：baseline 的候选框各裁一个 2.5 倍的窗口、缩放到 96×96，窗口上做实例级 band attention 再回归框（`stage2_instance.py`）；5 个 arm 只差 attention 分支：plain（只做框回归）/ unsup / boxmask / band / oracle | 0.473 | plain 0.632 / **band 0.644** / oracle 0.756 | **第二阶段本身 +0.159 [+0.137, +0.178]（10/10），只需框标注**；band 相对 plain +0.012 [−0.001, +0.024]、相对 unsup −0.001、相对 boxmask +0.012——**事先约定的判断规则没过**。不用 band 的第二阶段比 Round 12 的方法高 +0.088。实例 band IoU 0.48（不再随目标大小变化）。成簇目标 recall 0.453 → 0.453，是剩下的瓶颈；真实实例 band 在这一层 +0.205。第一阶段带 attention 时再接第二阶段是 0.656（+0.024），框掩码监督的 attention 同样（0.662） |
-| **15** | 11-16 凌晨 | **拟合定框**：沿 band 给每个检测拟合一条双曲线（顶点 + slope），取被 band 支持的一段，代替按框中心的 Voronoi 切分（`fit_hyperbola.py`，不重训） | 0.473 | 预测 band 0.530 / 真实 band **0.658**（oracle 检测 0.719） | 真实 band：Voronoi → 拟合 **+0.069 [+0.054, +0.084]（10/10）**；和同一个第一阶段上不用 band 的第二阶段相比总 F1 打平（0.658 对 0.656），但**成簇目标 recall +0.100 [+0.068, +0.129]（0.474 → 0.574）**、F1@IoU0.7 +0.041。预测 band：拟合比 Voronoi 差 −0.015 [−0.032, +0.002]——现有的 band（IoU 0.38）不够用 |
-| **16** | 11-16 凌晨 | **全分辨率 attention 头**：U 形解码到 224×224 输出和监督（`--attn-head unet`），band 组和框掩码对照各 50 个 run，再做两种定框 | 0.473 | fusion 0.489 / Voronoi 0.542 / **拟合 0.549** | band IoU 训练图 0.54 → 0.76，测试图 0.38 → 0.42：**限制在数据量，不在结构**。拟合定框 +0.019 [+0.002, +0.040]，追平 Round 12 的方法；fusion、Voronoi 不动。band 相对框掩码：同一规则 +0.036 [+0.017, +0.054]（9/1），各取最好规则 +0.027 [−0.001, +0.060]。比不用 band 的第二阶段低 0.083 |
+两次 baseline 数字：Round 1–6 在 5060 Ti 上（0.475），Round 4 起在 5090 上重跑（0.473）。
+
+| Round | 日期 | 做了什么 | 关键数字（F1） | 结论 |
+|---|---|---|---|---|
+| 1 | 11-14 下午 | 误用旧标注 | 0.42 vs 0.41 | **作废** |
+| 2 | 11-14 晚 | 新标注、official box、single fold | 0.44 vs 0.44 | 没有提升；比论文低 0.3 |
+| 3 | 11-14 晚 | HBAT box + 水平翻转，3 seeds | 0.52 vs 0.57 | 看似 +0.04，后证明是随机波动 |
+| **4** | 11-14 深夜；11-15 5090 重跑 | **paired initialization + 5-fold + 10 seeds** | 0.473 → 0.492 | **Δ +0.004 / +0.019，和换显卡同量级。正式结果** |
+| 5 | 11-15 | 诊断（只读预测） | — | 瓶颈是 FN；约 4 成 FN 是框画小了 |
+| 6 | 11-15 | 用 band 把框扩大（post-processing） | 0.479 → 0.541 | band 知道框该多大（Round 12 正式化） |
+| 7 | 11-15 | 真实 band 直接喂 fusion | 0.473 → 0.505 | fusion 通路上限只有 +0.03 |
+| 8 | 11-15 | extent fusion；检测头 stride 4 | 0.484；0.434 | 都没有用 |
+| 9 | 11-15 | 训练集 50% / 25% | Δ +0.005 / −0.021 | 数据越少 attention 越没用 |
+| 10 | 11-15 | λ 0.1 / 0.3 / 1.5；gate | Δ 全在 ±0.02 内 | λ、fusion 方式都不是原因 |
+| 11 | 11-15 晚 | 分层分析（只读预测） | — | fusion 的 +0.02 = 多检出约 5 个孤立目标，框大小没变 |
+| **12** | 11-15 晚 | **box refinement 做进推理** | 0.473 → **0.545** | **+0.072，10/10**；其中 scale control 能拿 +0.029 |
+| **13** | 11-15 深夜 | **box-mask control** | 0.519 vs 0.545 | **band 形状特有 +0.025，7/3，p = 0.11** |
+| **14** | 11-16 凌晨 | **stage 2**（按每条双曲线回归） | plain 0.632 / band 0.644 | **只用框标注 +0.159**；band 不比 plain 好 |
+| **15** | 11-16 凌晨 | **hyperbola fit** 代替 Voronoi split | 真实 band 0.658；预测 band 0.530 | band 准确时 grouped recall +0.10；预测 band 不够准 |
+| **16** | 11-16 凌晨 | **U-shaped decoder** attention head | fit 0.549 | band IoU 训练 0.76 / 测试 0.42：**受数据量限制** |
 
 ---
+
+# 阶段 A：复现
 
 ## Round 1：标注文件用错，作废
 
@@ -109,9 +158,9 @@
 
 **结果**：0.419 vs 0.411，远低于论文。
 
-**出了什么问题**：用户发现有几张图明明标过了，数据里却是空的。查下来，用户重新标注的文件保存在图片目录 `original/original_Utilities/annotations.json`（HBAT 不加 `--out` 时的默认保存位置），而训练读的是另一份旧的初始标注。对比两份文件：131 张图全部有改动，是一次完整的重新标注。
+**出了什么问题**：几张图明明标过了，数据里却是空的。查下来，重新标注的文件保存在图片目录 `original/original_Utilities/annotations.json`（HBAT 不加 `--out` 时的默认位置），训练读的是另一份旧的初始标注。两份对比：131 张图全部有改动。
 
-**处理**：Round 1 的结果全部作废，归档到 `runs_legacy_init_1114/`；重新标注的文件移到 `hbat/`，旧的初始标注改名为 `annotations_legacy_init_20261114.json`。
+**处理**：结果作废，归档到 `runs_legacy_init_1114/`；重新标注的文件移到 `hbat/`，旧的初始标注改名为 `annotations_legacy_init_20261114.json`。
 
 > ⚠️ 以后启动 HBAT 请加 `--out data/additional_utilities/hbat`。标注改过之后要重新运行 `prepare_data.py`。
 
@@ -121,11 +170,11 @@
 
 **日期**：11-14 晚
 
-**做了什么**：用重新标注的 band 作 attention 的监督目标，检测目标用 official box。只跑 fold 0（train 91 / val 13 / test 27 张），先跑 1 个 seed，再补到 3 个。
+**为什么做**：当时的决定是"检测框一律用 official box，HBAT 只提供 mask"。
 
-**为什么这样做**：当时的决定是"检测框一律用 official box，HBAT 只提供 mask"。
+**做了什么**：用重新标注的 band 作 attention 的监督目标，检测目标用 official box。只跑 fold 0（train 91 / val 13 / test 27 张），1–3 个 seed。
 
-**结果**（test set F1，score threshold 在 validation set 上选）
+**结果**（test F1，threshold 在 validation set 上选）
 
 | seed | baseline | +attention |
 |---|---|---|
@@ -133,139 +182,136 @@
 | 1 | 0.222 | 未跑 |
 | 2 | 0.430 | 0.411 |
 
-另做了一个对照：把 attention 的监督目标从 band 换成"把 official box 整个涂满"，F1 降到 0.308，比用 band 差很多。说明 band 的形状确实起作用。
+另一个对照：attention 的监督目标换成"把 official box 整个涂满"，F1 降到 0.308。
 
-**学到什么**
+**结论**
 
-1. 两个 arm 分数基本一样，论文里的 +0.06 没有出现。
-2. 整体分数从论文的 0.67–0.73 掉到 0.44。查了原因：
-   - **旧实验有 data leakage**：旧实验把 247 张增强图随机切分成训练集和测试集，84% 的测试图在训练集里有同一张原图的增强版本。新的切分按来源分组，同一来源的图只会在同一边，这部分"靠见过而得的分数"就没了。
-   - **box granularity mismatch**：official box 经常把 2–4 条双曲线框成一个大框，而模型是一条双曲线出一个小框。小框和大框的 IoU 达不到 0.5，就被判成 FP。test set 27 张图里有 12 张是这种情况；FP 中 80–90% 都是"框住了 official box 的一部分"。
-3. 不同 seed 之间波动极大：baseline 的 seed 1 直接掉到 0.222。波动这么大，3 个 seed 得不出任何结论。
+1. 两个 arm 分数一样，论文的 +0.06 没有出现。
+2. 整体分数比论文低 0.3，两个原因：
+   - **data leakage**：旧实验把 247 张增强图随机切分，84% 的测试图在训练集里有同一张原图的增强版本。新切分按来源分组，这部分分数没了。
+   - **box granularity mismatch**：official box 经常一个框套 2–4 条双曲线，模型一条出一个框，IoU 不到 0.5 被判成 FP。27 张测试图里 12 张是这种情况；FP 中 80–90% 是"框住了 official box 的一部分"。
+3. seed 之间波动极大（baseline seed 1 掉到 0.222），3 个 seed 得不出结论。
 
 ---
 
-## Round 3：换 HBAT box + 水平翻转增强，3 seeds
+## Round 3：HBAT box + 水平翻转，3 seeds
 
 **日期**：11-14 晚
 
-**做了什么**：针对 Round 2 的两个问题各改一项：检测目标改成 HBAT box（一条双曲线一个框）；打开原脚本里自带的水平翻转 data augmentation。2 × 2 共四种组合，各跑 3 个 seed。
+**为什么做**：针对 Round 2 的两个问题各改一项。
+
+**做了什么**：检测目标改成 HBAT box；打开原脚本自带的水平翻转。2 × 2 四种组合，各 3 个 seed。
 
 **结果**（fold 0，3 seeds 平均）
 
 | 检测框 | augmentation | baseline | +attention | ΔF1 |
 |---|---|---|---|---|
 | official box | 无 | 0.37 | 0.43 | （seed 1 未跑） |
-| official box | 水平翻转 | 0.38 | 0.43 | +0.049（3 个 seed 都为正） |
+| official box | 水平翻转 | 0.38 | 0.43 | +0.049（3/3 为正） |
 | HBAT box | 无 | 0.56 | 0.52 | −0.032 |
-| HBAT box | 水平翻转 | 0.52 | 0.57 | +0.044（3 个 seed 中 2 个为正） |
+| HBAT box | 水平翻转 | 0.52 | 0.57 | +0.044（2/3 为正） |
 
-**学到什么**
+**结论**
 
-1. **box granularity mismatch 是整体分数低的主要原因**：同样的模型，检测目标换成 HBAT box，F1 从 0.4 升到 0.55。
-2. **水平翻转让结果更稳定**：不同 seed 之间的 std 从 0.08–0.12 降到 0.03–0.04。
-3. 开了翻转之后看到 +0.04–0.05，当时以为提升回来了。**后来证明是随机波动**（见 Round 4）。
+1. **box granularity mismatch 是整体分数低的主因**：检测目标换成 HBAT box，F1 从 0.4 升到 0.55。
+2. 水平翻转让 seed 之间的 std 从 0.08–0.12 降到 0.03–0.04。
+3. 翻转后看到的 +0.04–0.05 **后来证明是随机波动**（Round 4）。
 
 ---
 
-## Round 4：paired initialization + 5-fold + 10 seeds（正式结果）
+## Round 4：严格协议（正式结果）
 
-**日期**：11-14 深夜
+**日期**：11-14 深夜；11-15 在 5090 上重跑
 
-**为什么还要做**：Round 3 的 +0.04 有三个问题：
-- **两个 arm 的初始化其实没对齐**：两个 arm 用同一个 seed 号，但 +attention 模型要多建几层，多消耗了一段随机数，导致后面检测头的初始权重和数据顺序都跟 baseline 不一样了。所以两者的差值里混进了初始化带来的随机差异。
-- 只有 3 个 seed，而且 single fold 的 test set 只有 47 个目标，多检对一个目标 F1 就变化 0.02。
-- 要检测的效应是 0.04，随机波动也是 0.04，要可靠地测出来大约需要 15 个 seed。
+**为什么做**：Round 3 的 +0.04 有三个问题：
+- **初始化没对齐**：+attention 模型多建几层，多消耗一段随机数，后面检测头的初始权重和数据顺序都和 baseline 不一样了。差值里混着初始化的随机差异。
+- single fold 的 test set 只有 47 个目标，多检对一个 F1 就变 0.02。
+- 效应 0.04、波动也 0.04，需要约 15 个 seed 才测得出来。
 
 **做了什么**
-- **paired initialization**：检测部分用 seed 初始化，两个 arm 的参数逐个完全相同（可用 `init_fingerprint` 核对）；attention 分支用另一个 seed 单独初始化；数据顺序用独立的随机生成器固定。
-- **5-fold CV**：按来源分组切成 5 份，5 个 fold 的 test set 合起来正好是全部 131 张图。
-- **10 seeds** × 5 folds × 4 组配置 = 200 个 run，共 74 分钟。
-- **评估**：每个 seed 把 5 个 fold 的 validation 预测合在一起选一个 score threshold，再把 5 个 fold 的 test 预测合在一起算一个 F1。这样每个 seed 得到一个数，10 个数做 paired 统计检验。
+- **paired initialization**：检测部分两个 arm 逐参数相同（`init_fingerprint` 可核对）；attention 分支用另一个 seed；数据顺序用独立的随机生成器固定。
+- **5-fold CV**：5 个 fold 的 test set 合起来正好是全部 131 张图。
+- **10 seeds** × 5 folds = 每个 arm 50 个 run。
+- **评估**：每个 seed 把 5 个 fold 的 validation 预测合并选一个 threshold，5 个 fold 的 test 预测合并算一个 F1。每个 seed 一个数，10 个数做 paired 检验。
 
-**结果**（HBAT box + 水平翻转，10 seeds 的 mean ± std）
+**结果**（HBAT box + 水平翻转，10 seeds）
+
+| | 5060 Ti | 5090 | 同配置换卡的 paired Δ |
+|---|---|---|---|
+| baseline | 0.475 ± 0.028 | 0.473 ± 0.024 | −0.002 [−0.029, +0.028] |
+| +attention | 0.479 ± 0.021 | 0.492 ± 0.031 | +0.013 [−0.005, +0.031] |
+| **ΔF1（+attention − baseline）** | **+0.004 [−0.021, +0.028]**，p = 0.56，7/0/3 | **+0.019 [+0.004, +0.035]**，p = 0.037，7/0/3 | |
+
+official box 那一组（只在 5060 Ti 上跑）：+0.009 [−0.012, +0.031]。
+
+<details><summary>5060 Ti 原始表（含 AP50、precision / recall）和每个 seed 的 ΔF1</summary>
 
 | arm | F1 | AP50 | precision / recall |
 |---|---|---|---|
 | baseline | 0.475 ± 0.028 | 0.360 | 0.511 / 0.450 |
 | +attention | 0.479 ± 0.021 | 0.364 | 0.525 / 0.445 |
 
-**paired 差值**（+attention − baseline）：**ΔF1 = +0.004，95% CI [−0.021, +0.028]，Wilcoxon p = 0.56，10 个 seed 中 7 个为正、3 个为负**。AP50 的差值同样在 0 附近。official box 那一组也一样（+0.009 [−0.012, +0.031]）。
-
 每个 seed 的 ΔF1：+0.028, +0.003, −0.035, +0.019, +0.080, +0.007, −0.078, +0.003, +0.026, −0.013。
+</details>
 
-**11-15 在 5090 上的重跑**（同一代码、同一 seed，结果目录 `runs_cv/ds2/hbatbox_aug_none` / `hbatbox_aug_abs`；上面这批 5060 Ti 的原始结果改名为 `*_win5060ti`）：
+**结论**
 
-| arm | 5060 Ti | 5090 | 同配置换卡的 paired Δ |
-|---|---|---|---|
-| baseline | 0.475 ± 0.028 | 0.473 ± 0.024 | −0.002 [−0.029, +0.028] |
-| +attention | 0.479 ± 0.021 | 0.492 ± 0.031 | +0.013 [−0.005, +0.031] |
-| **ΔF1（+attention − baseline）** | **+0.004 [−0.021, +0.028]**，p = 0.56，7/0/3 | **+0.019 [+0.004, +0.035]**，p = 0.037，7/0/3 | |
+1. **提升基本不存在。** 换卡只改变浮点 kernel，初始化和数据顺序完全相同，但同一配置的 10 seed 平均还是动了 0.002–0.013。+attention 的效应（+0.004 到 +0.019）和换卡属于同一量级。论文里应如实报告两次。
+2. Round 3 的 +0.044 是随机波动：fold 0 上用对齐的 10 个 seed 重测，ΔF1 是 −0.005。
+3. 论文 Table IV 的 0.67 → 0.73 不能复现。整体分数低是 data leakage 和 box granularity mismatch，但**提升本身**也不在。
+4. 正面的发现：加 attention 不会让检测变差；attention map 确实落在 band 上（band IoU 0.38–0.46）。
 
-换卡只改变浮点 kernel，paired initialization 和数据顺序完全相同，但同一配置的 10 个 seed 平均还是动了 0.002–0.013，单个 seed 动 ±0.05。也就是说 **+attention 的效应（+0.004 到 +0.019）和"换一块显卡"属于同一量级**：5090 上 CI 刚好不含 0，5060 Ti 上含 0，两者都是真实的测量。论文里应如实报告两次。
-
-**学到什么**
-
-1. **提升不存在。** 95% CI 的半宽是 0.025，意思是：如果真实提升超过 0.03，这次实验就应该能测出来。
-2. Round 3 的 +0.044 是随机波动：在 fold 0 上用正确对齐的 10 个 seed 重测，ΔF1 是 −0.005。
-3. 论文 Table IV 的 0.67 → 0.73 无法复现。问题不在整体分数（那是 data leakage 和 box granularity mismatch 造成的），而在**提升本身**。
-4. 两个正面的发现：加 attention 不会让检测变差；attention map 确实落在 band 上（和 band 的 IoU 为 0.38–0.46）。
-
-完整数字见 `runs_cv/cv_summary.md`。
+完整数字：`runs_cv/cv_summary.md`。
 
 ---
 
+# 阶段 B：找原因
+
 ## Round 5：诊断为什么没有提升
 
-**日期**：11-15
+**日期**：11-15。不重新训练，只分析 Round 4 的预测。
 
-不重新训练，只分析 Round 4 的预测结果。按顺序问了四个问题。
+**问题 1：图太小，band 经过卷积后变模糊了？**
+原图 224×224，band 约 9 px 宽。attention map 是 56×56，band 只剩约 2 格宽，57% 的格子一半 band 一半背景；送进检测头前再 pooling 到 28×28，只剩约 1 格。
+→ attention 学到了 band（band IoU 0.38–0.46），不是"教不会"；但 band 的**形状**在送到检测头前就丢了。
 
-### 问题 1：是不是图太小，band 经过卷积之后变模糊了？
+> **11-21 补充**（`vis_band_resolution.py`，全部 130 张有 band 的测试图）：缩小本身丢得不多——56×56 监督目标保留 **88%** 的 band 像素，平均到 28×28 后 > 0.5 的格子保留 79%，丢的集中在翼尖和最细的末端；倒 U 形轮廓在 28×28 上仍然清楚。逐图看（fold 0 seed 0，原 head vs Round 16 的 U-shaped decoder）：两个 head 失败的是同一批——弱目标两个都画不出来，成簇目标两个都漏一条；224×224 的 decoder 在两翼也提前收住，停在原图反射变淡的地方。所以"两翼画不到头"主要是信号弱，不是分辨率；这和 Round 16 分辨率提到 224 后测试 band IoU 只从 0.38 到 0.42 一致。图在 `runs_cv/band_resolution/`（不入库，可重画）。
 
-量了一下：原图 224×224，band 约 9 像素宽。attention map 是 56×56，band 只剩约 2 格宽，57% 的格子一半是 band、一半是背景。attention map 送进检测头之前还要 pooling 到 28×28，band 只剩约 1 格宽，弧形基本变成一团亮斑。
-
-**答**：attention 本身学到了 band（IoU 0.38–0.46），所以不是"教不会"；但 band 的**形状**在送到检测头之前就丢了。检测头拿到的只是"这里有个东西"，而这一点检测任务自己就能学到。
-
-### 问题 2：是不是代码有 bug？
+**问题 2：代码有 bug？**
 
 | attention 要起作用需要满足 | 检查结果 | 满足？ |
 |---|---|---|
-| attention 学到了 band | IoU 0.38–0.46 | ✅ |
-| 检测头用上了 attention | fusion 层里 attention 通道的权重和普通特征通道一样大 | ✅ |
-| attention 提供了新信息 | 训练集上检测 loss 更低，但 test 没有变好；attention 质量好坏和 ΔF1 无关 | ❓ 大概率没有 |
+| attention 学到了 band | band IoU 0.38–0.46 | ✅ |
+| 检测头用上了 attention | fusion 层里 attention 通道的权重和普通通道一样大 | ✅ |
+| attention 提供了新信息 | 训练 loss 更低但 test 没变好；band IoU 和 ΔF1 无关 | ❓ 大概率没有 |
 | 新信息能解决瓶颈 | 见问题 3 | ❌ |
 
-**答**：没有 bug。信息传进去了，但补充的不是网络缺的东西。
+→ 没有 bug。信息传进去了，但补的不是网络缺的东西。
 
-### 问题 3：瓶颈在哪？为什么 attention 帮不上？
-
-两个 arm 的 recall 都只有 0.45，一半目标没检出来。把 FN（漏检）分了类（10 个 seed 累计 2220 个目标）：
+**问题 3：瓶颈在哪？**
+两个 arm 的 recall 都只有 0.45。FN 分类（10 seeds 累计 2220 个目标）：
 
 | FN 类型 | 占比 | 说明 |
 |---|---|---|
-| B：位置对，但 score 低于 threshold | 36% | 找到了，但置信度不够 |
-| **C：位置大致对，但框的大小不对**（和真值的 IoU 在 0.1–0.5） | **37–41%** | 找到了，框画错了 |
+| B：位置对，score 低于 threshold | 36% | 找到了，置信度不够 |
+| **C：位置大致对，框的大小不对（near miss）** | **37–41%** | 找到了，框画错了 |
 | D：基本没检测到 | 22–24% | 目标太弱或太小 |
 
-关键事实：**两个 arm 漏掉的是同一批目标**（相关系数 0.89）。难检的目标有一半来自信号偏弱、被图像边缘截断、或多条双曲线重叠的图。
+两个 arm 漏掉的是同一批目标（相关 0.89）。
+→ 漏检时网络已经在看那里了，缺的是"敢不敢确定"（B）和"框该多大"（C）。attention 原设计针对 FP（不要看背景），现在的问题是 FN。
 
-**答**：attention 的作用像荧光笔，标出"看这里"。但漏检时网络其实已经在看那里了，它缺的是"敢不敢确定"（B 类）和"框该画多大"（C 类）。attention 是从同一份特征算出来的，网络看不清的地方它也画不准，提供不了新证据。原设计针对的是 FP（不要看背景），而现在的问题是 FN。
-
-### 问题 4：C 类（框画错）具体错在哪？
+**问题 4：C 类具体错在哪？**
 
 | 指标 | 数值 |
 |---|---|
-| 预测框宽 / 真值框宽（中位数） | 0.75–0.79 → **大多画小了** |
-| 只把预测框的宽高换成真值，IoU 能超过 0.5 的比例 | 52–58% |
-| 只把预测框的中心换成真值，IoU 能超过 0.5 的比例 | 36% |
-| 预测框其实落在了相邻那条双曲线上的比例 | 35–42% |
+| 预测框宽 / 真值框宽（中位数） | 0.75–0.79，**大多画小了** |
+| 只把宽高换成真值，IoU > 0.5 的比例 | 52–58% |
+| 只把中心换成真值，IoU > 0.5 的比例 | 36% |
+| 预测框落在相邻那条双曲线上 | 35–42% |
 
-**答**：主要是大小错，不是位置错。双曲线的两翼越往外越淡，网络还没到边就把框收住了。
+→ 主要是大小错，不是位置错。双曲线两翼越往外越淡，网络提前收住了框。
 
-### 这一轮的结论
-
-> **band 的信息有用，但用错了地方。** 把它当"往哪看"的提示没用，因为网络本来就知道往哪看；网络真正缺的是"**目标有多大**"，而这正是 band 能提供的。
+**结论**：band 的信息有用，但用错了地方。把它当"往哪看"的提示没用，网络缺的是"目标有多大"。
 
 脚本：`diag_resolution.py`（问题 1）、`diag_misses.py`（问题 3）、`diag_box_size.py`（问题 4）。
 
@@ -275,7 +321,9 @@
 
 **日期**：11-15
 
-**做了什么**：不重新训练，拿 Round 4 的 50 个 +attention 模型，在 inference 时多加一步 post-processing：把 attention map 二值化得到 band，沿着 band 把预测框往外扩，直到包住整条弧（**只扩大、不缩小**）。相邻双曲线的 band 按"离哪个检测中心更近"分开。参数只在 validation set 上选。另外用**人工标注的真实 band** 走同一流程，作为 upper bound。
+**为什么做**：验证 Round 5 的判断——band 知道框该多大。
+
+**做了什么**：不重新训练，拿 Round 4 的 50 个 +attention 模型，推理时加一步：attention map 二值化得到 band，沿 band 把框往外扩到包住整条弧（union，只扩不缩）。相邻双曲线的 band 用 Voronoi split 分开。参数只在 validation set 上选。再用**真实 band** 走同一流程作为 upper bound。
 
 ```
 真值框（绿）          网络预测框（红）        沿 band 扩大后（蓝）
@@ -285,80 +333,73 @@
 └─────────┘                                 └─────────┘
 ```
 
-**结果**（5 个 fold 合并、10 seeds）
+**结果**（5060 Ti，5-fold 合并，10 seeds）
 
 | | F1 | recall | AP50 |
 |---|---|---|---|
 | baseline | 0.475 | 0.450 | 0.360 |
-| +attention（Round 4 原样） | 0.479 | 0.445 | 0.364 |
-| **+attention + 沿 band 扩框** | **0.541** | 0.483 | **0.470** |
-| 用真实 band 扩框（upper bound） | 0.587 | 0.545 | 0.529 |
+| +attention | 0.479 | 0.445 | 0.364 |
+| **+attention + box refinement** | **0.541** | 0.483 | **0.470** |
+| 真实 band（upper bound） | 0.587 | 0.545 | 0.529 |
 
-paired 比较：+attention → 扩框 **ΔF1 = +0.063 [+0.054, +0.071]，p = 0.002，10 个 seed 全部为正**；baseline → 扩框 +0.067，9 正 1 负。
+paired：+attention → box refinement **+0.063 [+0.054, +0.071]，p = 0.002，10/0/0**。
 
-**三个发现**
+**结论**
 
-1. **"只扩不缩"的 20 组参数全部变好，"直接用 band 外接框替换"的 20 组全部变差。** 意思是预测的 band 画不全（两翼太淡的地方没涂到），但只要 band 伸出了原来的框，真值框几乎总是在那里。
-2. FN 中的 C 类（框画错）从 500 个降到 363 个，B 类和 D 类不变。改善的正是诊断指出的那一类。
-3. 离 upper bound 还差 0.046，差距来自"预测的 band 画得不够全"。
+1. union 的 20 组参数全部变好，replace 的 20 组全部变差：预测的 band 画不全，但只要 band 伸出了原框，真值框几乎总在那里。
+2. C 类 FN 从 500 降到 363，B、D 类不变：改善的正是诊断指出的那一类。
+3. 离 upper bound 还差 0.046，差在"预测的 band 不够全"。
 
-**定位（2026-11-15 决定）**：这只是一个 **post-processing** 步骤（性质类似 NMS），**不作为论文的主张，论文不因此改写**。它的价值在于证明：attention 分支学到了框缺少的尺寸信息，只是这个信息没有进入 box regression。正确的做法是把尺寸信息做进网络里，而不是靠 post-processing。
+> **定位的变化**：11-15 当天定为"只是 post-processing，不进论文主张"；11-15 晚 Round 12 把它改成方法正式的推理步骤、定位改为可进主表（见 revision_map S5）；11-16 Round 14 之后它又被不用 band 的 stage 2 超过，论文怎么写**待定**（见[下一步](#下一步) 1）。
 
-两点备注：用全局统一参数的那一组是在看过参数敏感性表之后才加的（参数只在 validation set 上选，而且 20 组参数全部变好，结论不依赖这一组）；baseline 没有 band 可用，所以"baseline → 扩框"比较的是"论文方法 + post-processing"和"什么都不加"。
-
-脚本：`refine_with_band.py`、`vis_refine.py`；结果 `runs_cv/refine/summary.md`；对比图 `runs_cv/refine/vis/seed0/`。
+脚本：`refine_with_band.py`、`vis_refine.py`；结果 `runs_cv/refine/summary.md`。
 
 ---
 
-## Round 7–10 之前：三个假设的分析
+## Round 7–10 之前：三个假设
 
-**日期**：11-15
+**日期**：11-15。Round 6 之后先按代码算了一遍，再决定跑什么。
 
-Round 6 之后提出了三个问题：图片尺寸是否适合当前 backbone、λ 的取值是否有影响、数据量是不是硬伤。先按代码算了一遍，再决定跑什么。
-
-**1. 图片尺寸与 backbone：确实不匹配，但病根是 receptive field，改图片尺寸解决不了。** 三个 DownBlock（每块两个 3×3 卷积 + 一次 pooling）的理论 receptive field：
+**1. 图片尺寸与 backbone 不匹配？病根是 receptive field，改图片尺寸解决不了。**
 
 | 位置 | stride | receptive field | 对比 |
 |---|---|---|---|
-| f3（attention head 的输入） | 4 | 32 px，attention head 再加一个 3×3 后约 40 px | 一条双曲线的框约 65 px 宽，attention head 只看得到六成 |
-| 检测头的输入 | 8 | 约 68 px，head 内的 3×3 后约 84 px | 刚好盖住一条双曲线，几乎没有上下文 |
+| f3（attention head 的输入） | 4 | 约 40 px | 一条双曲线约 65 px 宽，只看得到六成 |
+| 检测头的输入 | 8 | 约 84 px | 刚好盖住一条，几乎没有上下文 |
 | band | — | 约 9 px 厚 → 56×56 上 2 格，28×28 上 1 格 | 形状在 fusion 之前就丢了 |
 
-attention head 看不全一条双曲线，所以它"不知道两翼在哪里结束"，这就是 Round 6 里"预测的 band 画不全"的来源。把图放大，band 变粗了，但 receptive field 不够的问题加倍；把图缩小，band 就只剩几个像素被 stride 4 吃掉。**调输入尺寸是零和的**，该改的是网络：更大的 receptive field，以及在更高分辨率上做 fusion。另外数据集 2 的原图本来就是 224×224，放大不会带来新信息；分辨率假设只能在数据集 1（原图 640）上真正验证。
+把图放大，band 变粗但 receptive field 不够的问题加倍；缩小，band 被 stride 吃掉。调输入尺寸是零和的，该改的是网络。数据集 2 原图本来就是 224×224，放大不带来新信息。
 
-**2. λ：值得扫一遍，但不是主因。** 训练末期检测 loss 约 0.15、attention loss 约 0.39，乘上 λ = 0.7 后 attention 项是检测项的 1.8 倍。但 Round 5 已经证明 attention 学到了 band、信息也传进了检测头，瓶颈是"传进去的不是检测头缺的那种信息"。λ 只决定学多少 band，不改变 band 的信息用在哪里。
+**2. λ 太大？值得扫，但不是主因。** λ 只决定学多少 band，不改变 band 的信息用在哪里。
 
-**3. 数据量：对整体精度是硬伤，对"证明 attention 有效"恰恰相反。** 每个 fold 约 91 张训练图、约 150 个训练目标，2M 参数从零训练，训练 loss 0.15 而 test F1 0.48，overfitting 明显。但辅助监督在小数据上理应起正则化作用，小数据下没有提升，说明现在的设计没有把 band 用成正则项，不能拿数据量当理由。数据量真正限制的是统计功效：10 个 seed 的 95% CI 半宽 0.025，只能测出 ≥ 0.03 的效应，而小于 0.05 的提升发出去也没有说服力。
+**3. 数据量？对整体精度是硬伤，但不能拿来解释"没有提升"。** 辅助监督在小数据上理应起正则化作用；小数据下没有提升，说明设计没把 band 用成正则项。数据量真正限制的是统计功效：10 seed 只能测出 ≥ 0.03 的效应。
 
-**结论**：接下来要证明的不是"加 attention 有用"，而是"**用对地方的 band 监督有用**"。先用 upper bound 实验区分"band 预测得不够好"还是"fusion 本身用不上 band"（Round 7），再把 band 的尺寸信息直接接到 box regression（Round 8）；数据量曲线、λ、gate 作为补充（Round 9、10）。
+**计划**：Round 7 用 upper bound 区分"band 预测不够好"还是"fusion 用不上 band"；Round 8 把尺寸信息接到 box regression；Round 9、10 补数据量、λ、gate。
 
-**数据集 1 复跑（原优先级 1）暂时阻塞**：`data/primary_roboflow/hbat/annotations.json` 的 band 标注不完整，`ds1_f0_s100/manifest.json` 显示 60 多个训练项没有 band（数据是用 `--missing-mask skip` 生成的）。两个 arm 都丢掉这些图会让比较失真，要等标注补齐再跑。
+**数据集 1 暂时阻塞**：`data/primary_roboflow/hbat/annotations.json` 有 60 多个训练项没有 band，要等标注补齐。
 
-**代码**：`train_basic.py` 新增 `--mode oracle`、`--fuse extent`、`--det-stride 4`、`--train-frac`。旧的 none / abs 两个 arm 在新脚本下逐位复现（3 个 epoch 的 train log 与预测完全一致，见 `runs_smoke/ds2/regress_*`），所以 Round 4 的结果可以直接拿来配对。
+**代码**：`train_basic.py` 新增 `--mode oracle`、`--fuse extent`、`--det-stride 4`、`--train-frac`；旧的 none / abs 在新脚本下逐位复现（`runs_smoke/ds2/regress_*`）。
 
 ---
 
-## Round 7：upper bound 诊断，真实 band 直接做 fusion
+## Round 7：真实 band 直接做 fusion（upper bound）
 
 **日期**：11-15
 
-**做了什么**：新模式 `--mode oracle`：去掉 attention head，把**人工标注的真实 band**（56×56 的 mask）直接当 attention map 送进原来的 concat fusion 层，训练和 inference 都用真实 band。其余与 Round 4 完全一致（paired initialization、5-fold × 10 seeds、HBAT box + 水平翻转）。实验名 `hbatbox_aug_oracle`，50 个 run。
+**为什么做**：band 完全正确时，现在这条 fusion 通路最多能换来多少？大涨 → 瓶颈是 band 质量；不动 → 通路本身传不了尺寸信息。
 
-**为什么**：这是"band 完全正确时，现在这条 fusion 通路能换来多少 F1"的 upper bound。
-- 如果 F1 大涨：fusion 通路能利用 band，瓶颈是 band 预测质量，下一步该提升 band 的完整度。
-- 如果 F1 基本不动：1 通道 pooling 后 concat 这条通路本身就传不了尺寸信息，再在它上面调 λ 没有意义。
+**做了什么**：`--mode oracle`：去掉 attention head，把真实 band（56×56）直接当 attention map 送进原来的 concat fusion，训练和推理都给。其余同 Round 4。`hbatbox_aug_oracle`，50 个 run。
 
-**结果（5090 上 50 个 run 全部重跑，5-fold 合并，n = 10 seeds；baseline / +attention 也在同一块卡上重跑，见"在新机器上继续"）**
+**结果**（5090，n = 10）
 
-| A → B | F1 A | F1 B | ΔF1 [95% CI] | Wilcoxon p | 胜/平/负 | ΔAP50 [95% CI] |
-|---|---|---|---|---|---|---|
-| baseline → oracle（真实 band） | 0.473 | 0.505 | **+0.032 [+0.019, +0.045]** | 0.004 | 9/0/1 | +0.037 [+0.022, +0.052] |
-| +attention → oracle | 0.492 | 0.505 | +0.014 [−0.005, +0.031] | 0.193 | 6/0/4 | −0.002 [−0.035, +0.027] |
-| baseline → +attention（同卡重跑，供对照） | 0.473 | 0.492 | +0.019 [+0.004, +0.035] | 0.037 | 7/0/3 | +0.039 [+0.011, +0.072] |
+| A → B | F1 A → B | ΔF1 [95% CI] | p | 胜/平/负 | ΔAP50 [95% CI] |
+|---|---|---|---|---|---|
+| baseline → oracle | 0.473 → 0.505 | **+0.032 [+0.019, +0.045]** | 0.004 | 9/0/1 | +0.037 [+0.022, +0.052] |
+| +attention → oracle | 0.492 → 0.505 | +0.014 [−0.005, +0.031] | 0.193 | 6/0/4 | −0.002 [−0.035, +0.027] |
 
-oracle 的 10 个 seed 之间 std 只有 0.011（baseline 0.024、+attention 0.031）：真实 band 让训练稳定了，但均值只高 0.03。
+oracle 的 seed 间 std 只有 0.011（baseline 0.024、+attention 0.031）：真实 band 让训练更稳，但均值只高 0.03。
 
-**判断**：**真实 band 走现有 concat fusion 通路，上限是 +0.03。** 这推翻了 11-15 下午基于 36 个 run、按单折统计的初步判断（"≈ baseline"）——那批数字每折只有 27 张测试图、std 0.09，分辨不出 0.03 的差别。现在的结论介于两种预设情形之间：通路能用 band，但只能换来 0.03；学出来的 attention（band IoU 约 0.38）拿到了其中的 +0.019。对比 Round 6：同一份真实 band 用在 post-processing 上能到 0.587（+0.11）。信息在，通路只传过来四分之一。
+**结论**：**fusion 通路的上限只有 +0.03**；学出来的 attention 拿到其中 +0.019。同一份真实 band 用在 box refinement 上是 +0.11（Round 6）：信息在，通路只传过来四分之一。（11-15 下午基于 36 个 run、单折统计的"≈ baseline"判断被推翻。）
 
 ---
 
@@ -366,26 +407,27 @@ oracle 的 10 个 seed 之间 std 只有 0.011（baseline 0.024、+attention 0.0
 
 **日期**：11-15
 
-**做了什么**：两条路，都保持 paired initialization 协议。
+**为什么做**：让 fusion 能传尺寸信息。
 
-a) **extent features fusion**（`--fuse extent`）：fusion 的输入不再是 1 通道平均 pooling，而是从 56×56 的 attention map 算 4 个通道：原图、水平 17 格 box filter（约 68 px）、竖直 17 格、水平 33 格（约 132 px），再 pooling 到 28×28 和检测特征 concat。box filter 没有参数，只是把"band 在这附近延伸了多宽"显式算出来给 wh head 用。实验 `hbatbox_aug_abs_extent`，和 Round 4 的 baseline / +attention 配对。另跑 `hbatbox_aug_oracle_extent`（真实 band + extent features）作为这条路的 upper bound。
+**做了什么**
+- a) **extent fusion**（`--fuse extent`）：从 56×56 attention map 算 4 个通道（原图、水平 17 格 / 竖直 17 格 / 水平 33 格 box filter），显式给出"band 在附近延伸多宽"。另跑真实 band + extent 作 upper bound。
+- b) **检测头搬到 stride 4**（`--det-stride 4`）：上采样回 56×56 再出头，fusion 在 band 还有 2 格厚时发生。两个 arm 都换。
 
-b) **检测头搬到 stride 4**（`--det-stride 4`）：bottleneck 特征最近邻上采样回 56×56，和 f3 concat 后过一个 ConvBlock，再出三个 head；attention 在 56×56 上直接 concat，不再 pooling。heatmap 的 sigma 从 6 格改成 12 格、NMS 核从 3 改成 5，物理尺度不变。两个 arm 都换这个 decoder，所以配对比较的是 `hbatbox_aug_none_s4 → hbatbox_aug_abs_s4`（新 baseline 3.39 M 参数，比原来多 1.5 M）。
+**结果**（n = 10）
 
-**为什么**：Round 5、6 说明 band 能提供"目标有多大"，但 1 格宽的 attention map 到检测头时只剩"这里有东西"。a 直接把尺寸算成特征；b 让 fusion 发生在 band 还有 2 格厚的时候。
+| A → B | F1 A → B | ΔF1 [95% CI] | p | 胜/平/负 |
+|---|---|---|---|---|
+| baseline → +attention (extent) | 0.473 → 0.484 | +0.011 [−0.015, +0.034] | 0.322 | 8/0/2 |
+| +attention (concat) → (extent) | 0.492 → 0.484 | −0.008 [−0.034, +0.016] | 0.770 | 4/0/6 |
+| baseline → oracle + extent（upper bound） | 0.473 → 0.516 | **+0.043 [+0.024, +0.061]** | 0.004 | 9/0/1 |
+| baseline_s4 → +attention_s4 | 0.463 → 0.434 | −0.029 [−0.092, +0.016] | 0.846 | 6/0/4 |
+| baseline → baseline_s4 | 0.473 → 0.463 | −0.010 [−0.048, +0.029] | 0.695 | 5/0/5 |
+| +attention → +attention_s4 | 0.492 → 0.434 | −0.057 [−0.113, −0.010] | 0.064 | 2/0/8 |
 
-**结果**（5-fold 合并，n = 10）：
-
-| A → B | F1 A | F1 B | ΔF1 [95% CI] | p | 胜/平/负 |
-|---|---|---|---|---|---|
-| baseline → +attention, extent fusion | 0.473 | 0.484 | +0.011 [−0.015, +0.034] | 0.322 | 8/0/2 |
-| +attention (concat) → +attention (extent) | 0.492 | 0.484 | −0.008 [−0.034, +0.016] | 0.770 | 4/0/6 |
-| baseline → oracle + extent（这条路的上限） | 0.473 | 0.516 | **+0.043 [+0.024, +0.061]** | 0.004 | 9/0/1 |
-| baseline_s4 → +attention_s4 | 0.463 | 0.434 | −0.029 [−0.092, +0.016] | 0.846 | 6/0/4 |
-| baseline → baseline_s4 | 0.473 | 0.463 | −0.010 [−0.048, +0.029] | 0.695 | 5/0/5 |
-| +attention → +attention_s4 | 0.492 | 0.434 | −0.057 [−0.113, −0.010] | 0.064 | 2/0/8 |
-
-**判断**：a) extent features 把真实 band 的上限从 +0.032 提到 +0.043，但学出来的 attention 配 extent 并不比配 concat 好（−0.008）：瓶颈回到 band 预测质量（IoU 0.38），不是特征的形式。b) 检测头搬到 stride 4 是死路：baseline 本身没变好，加 attention 反而更差，而且 seed 之间的 std 从 0.03 涨到 0.06–0.09（56×56 上 3.4 M 参数、91 张图，训练更不稳定）。**两条路都没有把 Round 6 的 +0.11 变成网络自己的能力。**
+**结论**
+- a) extent 把真实 band 的上限从 +0.032 提到 +0.043，但学出来的 attention 配 extent 不比 concat 好：瓶颈回到 band 质量（IoU 0.38）。
+- b) stride 4 是死路：baseline 没变好，+attention 更差，seed 间 std 从 0.03 涨到 0.06–0.09。
+- 两条路都没有把 Round 6 的 +0.11 变成网络自己的能力。
 
 ---
 
@@ -393,19 +435,19 @@ b) **检测头搬到 stride 4**（`--det-stride 4`）：bottleneck 特征最近�
 
 **日期**：11-15
 
-**做了什么**：`--train-frac 0.5 / 0.25`：训练子集由 fold 决定的固定 seed 抽取，两个 arm、所有 seed 看到完全相同的子集；validation set 和 test set 不变。四个实验各 50 个 run：`hbatbox_aug_{none,abs}_frac{50,25}`。
+**为什么做**：如果 ΔF1 随数据减少而变大，可以主张"band 是小样本下的有效先验"。
 
-**为什么**：直接回答"数据量是不是硬伤"。如果 ΔF1 随数据减少而变大，可以主张"band 监督是小样本下的有效先验"；如果不变，就彻底排除"数据量掩盖了效应"的解释。
+**做了什么**：`--train-frac 0.5 / 0.25`，两个 arm、所有 seed 用同一个子集；val / test 不变。
 
-**结果**（5-fold 合并，n = 10；每折训练图 91 → 46 → 23 张）：
+**结果**（每折训练图 91 → 46 → 23）
 
-| 训练集 | baseline F1 | +attention F1 | ΔF1 [95% CI] | p | 胜/平/负 | +attention 的 band IoU |
+| 训练集 | baseline | +attention | ΔF1 [95% CI] | p | 胜/平/负 | band IoU |
 |---|---|---|---|---|---|---|
-| 100%（91 张） | 0.473 | 0.492 | +0.019 [+0.004, +0.035] | 0.037 | 7/0/3 | 0.38 |
-| 50%（46 张） | 0.390 | 0.395 | +0.005 [−0.019, +0.025] | 0.432 | 7/0/3 | 0.35 |
-| 25%（23 张） | 0.263 | 0.242 | **−0.021 [−0.036, −0.008]** | 0.020 | 2/0/8 | 0.33 |
+| 100% | 0.473 | 0.492 | +0.019 [+0.004, +0.035] | 0.037 | 7/0/3 | 0.38 |
+| 50% | 0.390 | 0.395 | +0.005 [−0.019, +0.025] | 0.432 | 7/0/3 | 0.35 |
+| 25% | 0.263 | 0.242 | **−0.021 [−0.036, −0.008]** | 0.020 | 2/0/8 | 0.33 |
 
-**判断**：数据量确实是绝对精度的硬伤（91 → 23 张，F1 掉一半），但 Δ 并没有随数据减少而变大，反而在 23 张时变成显著的负值：图少的时候 attention 分支学不到像样的 band，还占用了检测头的容量。**"band 监督是小样本下的有效先验"这个主张不成立**，也排除了"数据量掩盖了效应"的解释。
+**结论**：数据越少 Δ 越小，23 张时显著为负（attention 分支学不到像样的 band，还占用了容量）。**"band 是小样本先验"不成立**，也排除了"数据量掩盖了效应"。
 
 ---
 
@@ -413,528 +455,537 @@ b) **检测头搬到 stride 4**（`--det-stride 4`）：bottleneck 特征最近�
 
 **日期**：11-15
 
-**做了什么**：`hbatbox_aug_abs_lam0.1 / 0.3 / 1.5`（默认 λ = 0.7）和 `hbatbox_aug_abs_gate`（fusion 改成 feat × (1 + attention)，早期探索里对弱检测器有 +0.03 的那种），各 50 个 run，都和 `hbatbox_aug_none` 配对。
+**为什么做**：审稿人一定会问；排除"attention loss 太大"和"fusion 太弱"。
 
-**为什么**：审稿人一定会问；排除"attention loss 权重太大"和"fusion 方式太弱"两种解释。
+**结果**（都和 baseline 0.473 配对，n = 10）
 
-**结果**（5-fold 合并，n = 10，都和同卡重跑的 baseline 0.473 配对）：
+| 配置 | +attention F1 | ΔF1 [95% CI] | 胜/平/负 | band IoU |
+|---|---|---|---|---|
+| λ = 0.1 | 0.474 | +0.001 [−0.020, +0.023] | 6/0/4 | 0.37 |
+| λ = 0.3 | 0.472 | −0.001 [−0.021, +0.016] | 6/0/4 | 0.38 |
+| λ = 0.7（默认） | 0.492 | +0.019 [+0.004, +0.035] | 7/0/3 | 0.38 |
+| λ = 1.5 | 0.468 | −0.005 [−0.026, +0.015] | 5/0/5 | — |
+| gate | 0.480 | +0.007 [−0.012, +0.026] | 6/0/4 | 0.39 |
 
-| 配置 | +attention F1 | ΔF1 [95% CI] | p | 胜/平/负 | band IoU |
-|---|---|---|---|---|---|
-| λ = 0.1 | 0.474 ± 0.025 | +0.001 [−0.020, +0.023] | 0.846 | 6/0/4 | 0.37 |
-| λ = 0.3 | 0.472 ± 0.024 | −0.001 [−0.021, +0.016] | 0.695 | 6/0/4 | 0.38 |
-| λ = 0.7（默认，Round 4 重跑） | 0.492 ± 0.031 | +0.019 [+0.004, +0.035] | 0.037 | 7/0/3 | 0.38 |
-| λ = 1.5 | 0.468 ± 0.038 | −0.005 [−0.026, +0.015] | 0.625 | 5/0/5 | — |
-| gate fusion（λ = 0.7） | 0.480 ± 0.022 | +0.007 [−0.012, +0.026] | 0.492 | 6/0/4 | 0.39 |
-
-**判断**：λ 从 0.1 到 1.5 之间 band IoU 几乎不变（0.37–0.38），ΔF1 在 −0.005 到 +0.019 之间无规律地波动，默认的 0.7 恰好是最好的一个——这更像是 10 个 seed 的抽样波动，而不是 λ 的效应。gate 和 concat 没有区别。**"attention loss 权重太大"和"fusion 方式太弱"两种解释都排除。**
+**结论**：band IoU 几乎不随 λ 变；ΔF1 无规律波动，默认 0.7 恰好最好，更像抽样波动。gate 和 concat 没区别。**两种解释都排除。**
 
 ---
 
-## Round 11：分层分析——attention 帮了哪类目标
+# 阶段 C：换一种用法
 
-**日期**：11-15 晚
+## Round 11：分层分析，attention 帮了哪类目标
 
-**做了什么**：不训练，只读 Round 4 / 7 / 8 已有的预测（`diag_strata.py`）。协议和 `aggregate_cv.py` 相同：每个 seed 把 5 折验证集合并选 threshold，5 折测试集合并（= 全部 131 张图、222 个 HBAT box）做 IoU 0.5 匹配，然后：
-- 按 HBAT 的目标标签分层算 recall：visibility（clear / medium / weak）、completeness（both / single / apex）、distortion（fit / deviates）、param_status（ok / rough / unparam）；按 GT 框宽度三分位（<53 / 53–80 / ≥80 px）；按图像上下文：图里 1 个还是 ≥2 个目标、该目标的 official box 是否还套着别的双曲线（grouped）、是否在旧论文的 247 张里（used / unused）。
-- 定位质量：同一 threshold 下 F1@IoU 0.3 / 0.5 / 0.7；每个 GT 的"最佳 IoU"分成 命中（≥0.5）/ 差一点（0.3–0.5，框画小了）/ 没检到（<0.3）；命中框的 预测/GT 宽高比；按图像类型的每图 FP。
-- 都按 seed 配对（n = 10），bootstrap 95% CI。
+**日期**：11-15 晚。不训练，只读 Round 4 / 7 / 8 的预测（`diag_strata.py`）。
 
-**为什么**：整体 F1 只有 +0.019，但如果 attention 只在某一类目标上起作用，整体平均会把它抹掉。这一步回答"+0.019 是哪几个目标、通过什么机制来的"，并用 oracle（真实 band）对照"band 的信息本来能帮到哪类目标"。
+**为什么做**：整体 +0.019 可能把"只对某一类目标有效"的作用抹平了。
 
-**结果 1：+0.019 的来源是多检出约 5 个目标，不是框画得更准**
+**做了什么**：按 HBAT 标签（visibility / completeness / distortion）、框宽度（narrow / medium / wide）、图像上下文（单目标图 / 多目标图、isolated / grouped）分层算 recall；看定位质量（F1@IoU 0.3 / 0.5 / 0.7、near miss 比例、命中框宽高比）。都按 seed 配对。
 
-| 指标（baseline → +attention） | A → B | Δ [95% CI] | 胜/平/负 |
+**结果**
+
+| 指标（baseline → +attention） | A → B | Δ [95% CI] |
+|---|---|---|
+| F1@IoU 0.3 / 0.5 / 0.7 | 0.629 / 0.473 / 0.165 → 0.632 / 0.492 / 0.170 | +0.003 / **+0.019** / +0.005 |
+| recall（222 个 GT） | 0.449 → 0.473 | +0.024 [−0.014, +0.059]，约多 5 个目标 |
+| GT 最佳 IoU：命中（≥ 0.5）/ near miss / 没检到（< 0.3） | 0.46 / 0.16 / 0.38 → 0.49 / 0.15 / 0.36 | +0.028 / −0.007 / −0.022 |
+| 命中框宽度比 / 高度比（预测 / GT） | 0.96 / 0.96 → 0.97 / 0.97 | 没变 |
+
+| 分层 | n | +attention 的 Δrecall | 真实 band（oracle）的 Δrecall |
 |---|---|---|---|
-| F1@IoU 0.3 | 0.629 → 0.632 | +0.003 [−0.015, +0.020] | 6/0/4 |
-| F1@IoU 0.5 | 0.473 → 0.492 | +0.019 [+0.004, +0.035] | 7/0/3 |
-| F1@IoU 0.7 | 0.165 → 0.170 | +0.005 [−0.011, +0.022] | 5/0/5 |
-| recall@0.5（222 个 GT） | 0.449 → 0.473 | +0.024 [−0.014, +0.059]，≈ +5 个目标 | 7/0/3 |
-| GT 最佳 IoU：命中 / 差一点 / 没检到 | 0.46 / 0.16 / 0.38 → 0.49 / 0.15 / 0.36 | 命中 +0.028、差一点 −0.007、没检到 −0.022 | 8/2、5/5、4/6 |
-| 命中框 宽度比 / 高度比（预测/GT，中位数） | 0.96 / 0.96 → 0.97 / 0.97 | +0.009 / +0.018 | 6/4、6/4 |
-| FP/图（单目标图 / 多目标图） | 0.68 / 0.87 → 0.71 / 0.84 | +0.035 / −0.027 | 5/5、5/5 |
+| 单目标图 | 72 | **+0.044 [+0.003, +0.078]** | +0.036 |
+| isolated / grouped | 129 / 93 | +0.038 / +0.005 | +0.027 / **+0.039** |
+| narrow < 53 px | 74 | +0.026 | **+0.068 [+0.032, +0.105]** |
+| deviates（形状偏离） | 39 | +0.059 [+0.005, +0.110] | +0.015 |
 
-"差一点"（框画小了、IoU 在 0.3–0.5）的目标占 16%，+attention 一个都没救回来；命中框的大小也没变；F1 在宽松（0.3）和严格（0.7）的 IoU 下都没动。多出来的约 5 个检出来自原来完全没检到的目标，precision 不降（0.504 → 0.531）。**attention 没有改善 box regression，只是让 heatmap 多亮了几个目标。** 这和 Round 6 的 band→框修正是两条独立的通道，Round 6 的 +0.066 没有被"用掉"。
+<details><summary>完整分层表（visibility、宽度、图像上下文、旧论文 used / unused）</summary>
 
-**结果 2：多出来的检出集中在孤立的、形状不规则的目标；真实 band 的收益集中在窄目标**
-
-| 分层 | 取值 | n GT | baseline recall | Δ +attention [95% CI] | 胜/负 | Δ oracle（真实 band）[95% CI] | 胜/负 |
+| 分层 | 取值 | n GT | baseline recall | Δ +attention [95% CI] | 胜/负 | Δ oracle [95% CI] | 胜/负 |
 |---|---|---|---|---|---|---|---|
 | 全部 | | 222 | 0.449 | +0.024 [−0.014, +0.059] | 7/3 | +0.032 [+0.012, +0.054] | 7/2 |
 | visibility | clear | 117 | 0.538 | +0.032 [−0.012, +0.071] | 8/2 | +0.034 [+0.008, +0.063] | 6/3 |
 | | medium | 76 | 0.433 | +0.013 [−0.025, +0.050] | 5/3 | +0.029 [−0.004, +0.061] | 8/2 |
 | | weak | 29 | 0.131 | +0.024 [−0.031, +0.093] | 5/4 | +0.031 [−0.010, +0.079] | 5/3 |
 | distortion | fit | 183 | 0.472 | +0.017 [−0.021, +0.051] | 6/3 | +0.036 [+0.015, +0.055] | 8/2 |
-| | **deviates** | 39 | 0.341 | **+0.059 [+0.005, +0.110]** | 6/3 | +0.015 [−0.038, +0.069] | 5/5 |
-| 宽度 | **narrow < 53 px** | 74 | 0.343 | +0.026 [−0.020, +0.066] | 7/2 | **+0.068 [+0.032, +0.105]** | 8/1 |
+| | deviates | 39 | 0.341 | +0.059 [+0.005, +0.110] | 6/3 | +0.015 [−0.038, +0.069] | 5/5 |
+| 宽度 | narrow < 53 px | 74 | 0.343 | +0.026 [−0.020, +0.066] | 7/2 | +0.068 [+0.032, +0.105] | 8/1 |
 | | medium 53–80 px | 72 | 0.567 | +0.024 [−0.011, +0.057] | 5/2 | −0.004 [−0.033, +0.025] | 5/4 |
 | | wide ≥ 80 px | 76 | 0.439 | +0.024 [−0.025, +0.071] | 6/4 | +0.032 [+0.007, +0.058] | 7/2 |
-| 图里目标数 | **1 个** | 72 | 0.451 | **+0.044 [+0.003, +0.078]** | 9/1 | +0.036 [+0.015, +0.058] | 8/1 |
+| 图里目标数 | 1 个 | 72 | 0.451 | +0.044 [+0.003, +0.078] | 9/1 | +0.036 [+0.015, +0.058] | 8/1 |
 | | ≥ 2 个 | 150 | 0.447 | +0.015 [−0.025, +0.051] | 7/3 | +0.030 [+0.004, +0.061] | 7/3 |
-| official box | 只套这一条（alone） | 129 | 0.446 | +0.038 [−0.004, +0.076] | 8/2 | +0.027 [+0.005, +0.047] | 8/2 |
-| | 套着 ≥2 条（grouped） | 93 | 0.453 | +0.005 [−0.032, +0.041] | 5/4 | **+0.039 [+0.011, +0.074]** | 7/2 |
+| official box | isolated | 129 | 0.446 | +0.038 [−0.004, +0.076] | 8/2 | +0.027 [+0.005, +0.047] | 8/2 |
+| | grouped | 93 | 0.453 | +0.005 [−0.032, +0.041] | 5/4 | +0.039 [+0.011, +0.074] | 7/2 |
 | 旧论文 | unused | 94 | 0.350 | +0.033 [−0.027, +0.093] | 6/3 | +0.048 [+0.011, +0.093] | 7/2 |
 | | used | 122 | 0.546 | +0.019 [−0.017, +0.050] | 7/2 | +0.021 [+0.000, +0.043] | 6/3 |
 
-（完整表含 completeness、param_status 和 extent fusion 的对照，见 `runs_cv/strata/summary.md`。）
+FP/图（单目标图 / 多目标图）：0.68 / 0.87 → 0.71 / 0.84。完整表含 completeness、param_status 和 extent fusion 对照：`runs_cv/strata/summary.md`。
+</details>
 
-**判断**
+**结论**
 
-1. **学出来的 attention 帮的是孤立目标。** 图里只有 1 个目标时 recall +0.044（9 胜 1 负），official box 只套一条双曲线时 +0.038；一旦相邻双曲线成簇（grouped），Δ 只有 +0.005。形状偏离理想双曲线的目标（deviates）也多检出了几个（+0.059，但只有 39 个 GT）。清晰度、宽度上没有规律。注意这是 8 种分层、二十多个格子里挑出的两个 CI 不含 0 的格子，只能算"方向"，不是结论。
-2. **真实 band 帮的是窄目标和成簇目标**：narrow +0.068（8 胜 1 负），grouped +0.039；F1@IoU 0.3 +0.042、10 个 seed 全胜，而 F1@IoU 0.7 不动——band 能把小而密的双曲线"点亮"，但不能让框更贴合。这两类正好是学出来的 attention 没拿到的部分：band 在 56×56 上只有 2 格厚，窄目标和重叠的两翼是 band 预测最差的地方（band IoU 只有 0.38）。
-3. **对"怎么体现 attention 的效果"的含义**：
-   - 现有通路里 attention 的作用是"多亮几个孤立目标"，不是改善定位，所以整体 F1 永远只会动 0.02 这个量级；分层 recall 和"precision 不降"是能写进论文的、站得住的描述。
-   - 框画小了的目标（16%，约 35 个）一个都没被 attention 救回来——这正是 Round 6 用 band 修正框能拿到 +0.066 的那批目标。把 band → 框尺寸做进推理（下一步 2）和现有的 attention 增益是**相加**的，不是重复计算。
-   - 要逼近 oracle，band 预测要在窄目标和成簇目标上变好（attention head 的 receptive field、不二值化的监督目标），而不是再调 fusion。
+1. **fusion 的 +0.019 = 多检出约 5 个目标，不是框画得更准。** near miss 一个没救回来，命中框大小没变，F1@IoU0.7 没动。
+2. 学出来的 attention 帮的是孤立目标（单目标图 +0.044）；真实 band 帮的是 narrow 和 grouped targets——正是预测 band 最差的地方。真实 band 的 F1@IoU0.3 +0.042（10/10）而 F1@IoU0.7 不动：它能把小而密的双曲线"点亮"，但不让框更贴合。注意这是二十多个格子里挑出的几个 CI 不含 0 的，只能算方向。
+3. near miss（16%）正是 Round 6 box refinement 能救的那批，所以 box refinement 和 fusion 的增益是**相加**的，不重复。
 
-**代码与输出**：`diag_strata.py` → `runs_cv/strata/summary.md`、`summary.json`。
+输出：`runs_cv/strata/summary.md`。
 
 ---
 
-## Round 12：band → 框尺寸做进推理
+## Round 12：box refinement 做进推理
 
 **日期**：11-15 晚
 
-**做了什么**：把 Round 6 的"沿 band 扩框"从事后分析变成方法正式的推理步骤，用 Round 4 重跑的 50 个 +attention 模型（不重训，`infer_bandbox.py`）：
-1. 推理时除了 heatmap / wh / offset，还取 attention map（56×56）→ 放大到输入分辨率 → 按 t 二值化得到 band；
-2. 分数 ≥ s_seed 的检测作为种子，band 像素按最近的种子中心划分（切开相邻双曲线），每个种子只取和自己原框相连的连通块；
-3. 新框 = 原框 ∪ band 连通块的外接框（union，只扩不缩）；分数不变。
-4. (t, s_seed, mode) 在 **10 个 seed 的合并验证集 F1 均值**上全局选一组（60 组候选，mode ∈ {replace, union, blend}），全部 seed 共用；测试集不参与。选中 **t = 0.6, s_seed = 0.5, union**。
-5. 新实验目录 `hbatbox_aug_abs_bandbox` 和其他 run 格式相同，直接进 `aggregate_cv.py` 配对。
+**为什么做**：Round 11 说明 fusion 没碰 near miss；Round 6 说明 band 知道框该多大。把 Round 6 从事后分析变成方法正式的推理步骤，attention 分支就成了输出框尺寸的必要环节。
 
-两个对照和两个上限，都走同一套"验证集全局选参"：
-- `hbatbox_aug_none_scale` / `hbatbox_aug_abs_scale`：把框绕中心统一放大 k 倍（k ∈ 1.0–1.6），再裁到图内。回答"框普遍画小了，随便放大是不是就行"。验证集选到 k = 1.05（baseline）和 k = 1.0（+attention，即只裁到图内）。
-- `hbatbox_aug_abs_gtbandbox`：+attention 的检测 + 真实 band 修正（选到 replace）；`hbatbox_aug_oracle_gtbandbox`：oracle 模型的检测 + 真实 band 修正（选到 blend）。
+**做了什么**（`infer_bandbox.py`，不重训，用 Round 4 在 5090 上的 50 个 +attention 模型）
+1. attention map → 放大到 224 → 按 t 二值化得 band；
+2. score ≥ s_seed 的检测作种子，Voronoi split，每个种子只取和原框相连的连通块；
+3. 新框 = union / replace / blend；
+4. (t, s_seed, mode) 共 60 组，在 **10 seeds 的合并验证集 F1 均值**上全局选一组，测试集不参与。选中 t = 0.6、s_seed = 0.5、union。
 
-**为什么**：Round 11 证明 attention 通过 fusion 只多亮了几个目标，完全没碰"框画小了"的 16% 目标；Round 6 证明 band 恰好知道框该多大。把这两件事接起来，attention 分支就成了输出框尺寸的必要环节，而不是一个可有可无的辅助 loss。
+对照与上限都走同一套选参：**scale control**（baseline 框统一放大 k，选到 k = 1.05）；真实 band 修正 +attention 的检测；真实 band 修正 oracle 模型的检测。
 
-**结果**（5 折合并，n = 10 seeds，HBAT box）
+**结果**（5-fold 合并，n = 10，HBAT box）
 
-| arm | F1 | P / R | AP50 | F1@IoU0.7 |
+| arm | F1 | precision / recall | AP50 | F1@IoU0.7 |
 |---|---|---|---|---|
 | baseline | 0.473 ± 0.024 | 0.504 / 0.449 | 0.352 | 0.165 |
-| baseline，框统一放大 1.05 倍（对照） | 0.501 ± 0.027 | 0.534 / 0.477 | 0.398 | 0.183 |
-| +attention（Round 4 重跑） | 0.492 ± 0.031 | 0.531 / 0.473 | 0.391 | 0.170 |
-| +attention，框裁到图内（k = 1.0 对照） | 0.499 ± 0.036 | 0.531 / 0.484 | 0.402 | — |
-| **+attention + band 定框（方法）** | **0.545 ± 0.025** | **0.600 / 0.510** | **0.482** | **0.242** |
-| +attention + 真实 band 定框（上限） | 0.589 ± 0.038 | 0.595 / 0.590 | 0.530 | 0.436 |
-| oracle 模型 + 真实 band 定框（上限） | 0.602 ± 0.021 | 0.605 / 0.605 | 0.543 | — |
+| scale control（× 1.05） | 0.501 ± 0.027 | 0.534 / 0.477 | 0.398 | 0.183 |
+| +attention | 0.492 ± 0.031 | 0.531 / 0.473 | 0.391 | 0.170 |
+| **+attention + box refinement（方法）** | **0.545 ± 0.025** | **0.600 / 0.510** | **0.482** | **0.242** |
+| + 真实 band（upper bound） | 0.589 ± 0.038 | 0.595 / 0.590 | 0.530 | 0.436 |
+| oracle 模型 + 真实 band | 0.602 ± 0.021 | 0.605 / 0.605 | 0.543 | — |
 
-| A → B | ΔF1 [95% CI] | Wilcoxon p | 胜/平/负 | ΔAP50 |
-|---|---|---|---|---|
-| **baseline → 方法** | **+0.072 [+0.059, +0.086]** | 0.002 | **10/0/0** | +0.130 [+0.107, +0.152] |
-| +attention → 方法（推理步骤本身的增量） | +0.053 [+0.041, +0.065] | 0.002 | 10/0/0 | +0.091 |
-| baseline → baseline 放大 1.05（对照） | +0.029 [+0.017, +0.041] | 0.002 | 10/0/0 | +0.046 |
-| +attention → 裁到图内（对照） | +0.007 [+0.003, +0.013] | 0.008 | 8/2/0 | +0.011 |
-| **baseline 放大 1.05 → 方法（band 特有的部分）** | **+0.043 [+0.030, +0.059]** | 0.002 | **10/0/0** | +0.084 |
-| 方法 → 真实 band 定框 | +0.044 [+0.021, +0.068] | 0.004 | 9/0/1 | +0.048 |
-| baseline → oracle 模型 + 真实 band 定框 | +0.129 [+0.111, +0.147] | 0.002 | 10/0/0 | +0.190 |
+| A → B | ΔF1 [95% CI] | p | 胜/平/负 |
+|---|---|---|---|
+| **baseline → 方法** | **+0.072 [+0.059, +0.086]** | 0.002 | **10/0/0** |
+| baseline → scale control | +0.029 [+0.017, +0.041] | 0.002 | 10/0/0 |
+| **scale control → 方法（band 特有部分）** | **+0.043 [+0.030, +0.059]** | 0.002 | 10/0/0 |
+| 方法 → 真实 band | +0.044 [+0.021, +0.068] | 0.004 | 9/0/1 |
 
 对 official box 评：baseline → 方法 +0.103 [+0.084, +0.125]（0.325 → 0.429），10/0/0。
 
-**参数敏感性**（`runs_cv/bandbox/sweep.md`，测试列只看不选）：union 的 20 组参数测试 F1 0.516–0.545，**全部**高于未修正的 0.492；replace 20 组全部更差（0.245–0.410）；blend 只有 2 组更好。统一放大的对照 k = 1.05–1.10 最好（+0.03），k ≥ 1.3 开始变差。结论不依赖于选到的那一组参数。
+<details><summary>完整配对、参数敏感性、定位质量与分层</summary>
 
-**定位质量和分层**（`runs_cv/strata_r12/summary.md`，baseline → 方法）
-
-| 指标 | A → B | Δ [95% CI] | 胜/负 |
-|---|---|---|---|
-| F1@IoU 0.3 / 0.5 / 0.7 | 0.629 / 0.473 / 0.165 → 0.658 / 0.545 / 0.242 | +0.030 / **+0.072** / **+0.078 [+0.059, +0.095]** | 9/1、10/0、10/0 |
-| GT 最佳 IoU：差一点（0.3–0.5，框画小了） | 0.160 → 0.122 | **−0.038 [−0.058, −0.021]** | 1/9 |
-| GT 最佳 IoU：没检到（<0.3） | 0.378 → 0.347 | −0.031 [−0.074, +0.015] | 2/8 |
-| 命中框 宽度比 / 高度比（预测 ÷ GT） | 0.96 / 0.96 → **1.01 / 0.99** | +0.047 / +0.034 | 9/1、9/1 |
-| FP/图（单目标图 / 多目标图） | 0.68 / 0.87 → 0.53 / 0.72 | −0.14 / −0.15 | 8/2、7/3 |
-| recall：宽目标 ≥ 80 px（n = 76） | 0.439 → 0.584 | **+0.145 [+0.095, +0.188]** | 9/0 |
-| recall：窄目标 < 53 px（n = 74） | 0.343 → 0.357 | +0.014 [−0.028, +0.051] | 6/3 |
-| recall：图里 1 个目标（n = 72） | 0.451 → 0.603 | **+0.151 [+0.115, +0.185]** | 10/0 |
-| recall：图里 ≥ 2 个目标（n = 150） | 0.447 → 0.466 | +0.019 [−0.021, +0.056] | 7/3 |
-| recall：official box 只套这一条 / 套着多条 | 0.446 / 0.453 → 0.537 / 0.473 | +0.091 / +0.020 | 9/1、7/3 |
-
-和放大 1.05 倍的对照比，band 特有的那 +0.043 recall 增量几乎全部在宽目标（+0.093）和单目标图（+0.111，10 胜 0 负）上；成簇目标和 ≥2 目标的图是 −0.003 / −0.004。
-
-**判断**
-
-1. **这是全项目第一个在严格协议下过硬的 attention 效果**：ΔF1 +0.072，10 个 seed 全胜，CI 下界 +0.059，远大于换显卡的噪声（0.013）；对 official box 评也有 +0.103。attention 分支在这里是必要环节——baseline 没有 attention map，做不了这一步。
-2. **机制和 Round 5、6、11 的诊断完全一致**："框画小了"的目标从 16% 降到 12%，命中框的宽高比从 0.96 回到 1.0，F1@IoU0.7 提升和 F1@0.5 一样大——改善的是定位，不是检出；FP 还降了（precision 0.50 → 0.60），因为扩大后的框更容易匹配到 GT 而不是被判成 FP。
-3. **必须如实报告对照**：baseline 的框统一放大 5% 就有 +0.029，说明这个网络系统性地把框画小；band 特有的增量是 +0.043，集中在**宽的、孤立的**双曲线——两翼伸得远、band 能一直画到头的地方。**成簇目标一点都没改善**（Voronoi 切分在相邻双曲线重叠的两翼上失效），窄目标也没有（band 本来就不比原框大）。这和 Round 11 里 oracle 的收益集中在窄目标、成簇目标正好互补：**现在的瓶颈是 band 在窄 / 成簇目标上预测不出来**，真实 band 还能再给 +0.044。
-4. 论文里的写法：主表放 baseline / +attention / +attention + band 定框 三行，附放大对照和真实 band 上限；方法部分把"band 定框"写成推理的一部分（两个超参，验证集选，60 组里 union 全部有效）；讨论里说清楚 fusion 通路的 +0.02 和 band 定框的 +0.05 是两个独立机制。
-
-**代码与输出**：`infer_bandbox.py infer`（重推理 150 个 run，缓存 `runs_cv/bandbox_cache/`，不入库）→ `infer_bandbox.py build`（选参、写 5 个新实验的 run 目录，`runs_cv/bandbox/chosen.json`、`sweep.md`）；`aggregate_cv.py` 已登记 8 对；`diag_strata.py --out runs_cv/strata_r12`。
-
----
-
-## Round 13：box-mask 对照——收益来自稠密头还是 band 的形状
-
-**日期**：11-15 深夜
-
-**为什么**：Round 12 对 +0.072 的解释是"band 告诉了框的尺寸"。但另一个解释同样成立：一个逐像素的稠密头本来就比中心格回归更会估尺寸，这和双曲线形状无关；而且 HBAT 框按定义就是 band 的外接矩形，band 对这个 GT 有天然优势。要把"稠密头"和"band 形状"分开，需要一个**只用框标注、没有任何 band 形状**的稠密头走完全相同的流程。这是决定论文能不能说"band 标注优于框标注"的对照。
-
-**做了什么**：`hbatbox_aug_boxmask`：与 `hbatbox_aug_abs` 完全相同（abs 模式、concat fusion、λ = 0.7、paired init、翻转增强、5 折 × 10 seeds），唯一区别是 attention 头的监督目标从 band 掩码换成**填实的 HBAT 框**（`masks_box/`，`prepare_data.py` 本来就导出，不需要新标注）。然后 `infer_bandbox.py` 对它做同样的 mask → 框步骤（`hbatbox_aug_boxmask_bandbox`：60 组参数、10 个 seed 合并验证集全局选，测试集不参与），选中 **t = 0.6, s_seed = 0.3, blend**（方法选中的是 union）。50 个 run 在 IWAC1 上 6.6 分钟，重推理与原预测差 0。
-
-**结果**（5 折合并，n = 10 seeds，HBAT box；TP / FP 为每个 seed 的均值，222 个 GT）
-
-| arm | 标注 | F1 | P / R | AP50 | F1@IoU0.7 | 阈值 | TP | FP |
-|---|---|---|---|---|---|---|---|---|
-| baseline | 框 | 0.473 ± 0.024 | 0.504 / 0.449 | 0.352 | 0.165 | 0.61 | 99.6 | 99.9 |
-| +attention（band） | 框 + band | 0.492 ± 0.031 | 0.531 / 0.473 | 0.391 | 0.170 | 0.61 | 105.0 | 100.8 |
-| +attention（box-mask，对照） | 框 | 0.502 ± 0.034 | 0.523 / 0.492 | 0.398 | 0.188 | 0.53 | 109.2 | 102.9 |
-| box-mask + mask 定框（对照全流程） | 框 | 0.519 ± 0.030 | 0.579 / 0.476 | 0.434 | 0.218 | 0.63 | 105.6 | 78.3 |
-| **+attention（band）+ band 定框（方法）** | 框 + band | **0.545 ± 0.025** | 0.600 / 0.510 | 0.482 | 0.242 | 0.65 | 113.3 | 80.7 |
+对照 arm 补充：+attention 的框只裁到图内（k = 1.0）是 0.499 ± 0.036（precision / recall 0.531 / 0.484，AP50 0.402）。
 
 | A → B | ΔF1 [95% CI] | Wilcoxon p | 胜/平/负 | ΔAP50 |
 |---|---|---|---|---|
-| baseline → box-mask fusion | +0.029 [+0.014, +0.044] | 0.014 | 8/0/2 | +0.046 [+0.024, +0.068] |
-| band fusion → box-mask fusion | +0.010 [−0.012, +0.031] | 0.49 | 6/0/4 | +0.007 |
-| box-mask fusion → box-mask + 定框 | +0.018 [−0.004, +0.039] | 0.16 | 6/0/4 | +0.036 [+0.009, +0.063] |
-| baseline → box-mask + 定框（对照全流程） | +0.046 [+0.030, +0.063] | 0.002 | 10/0/0 | +0.082 |
-| baseline 放大 1.05 → box-mask + 定框 | +0.018 [−0.001, +0.039] | 0.16 | 7/0/3 | +0.036 |
-| **box-mask + 定框 → 方法（band 形状特有的部分）** | **+0.025 [+0.002, +0.046]** | **0.105** | **7/0/3** | +0.048 [+0.019, +0.074] |
+| baseline → 方法 | +0.072 [+0.059, +0.086] | 0.002 | 10/0/0 | +0.130 [+0.107, +0.152] |
+| +attention → 方法（推理步骤本身） | +0.053 [+0.041, +0.065] | 0.002 | 10/0/0 | +0.091 |
+| baseline → scale control | +0.029 [+0.017, +0.041] | 0.002 | 10/0/0 | +0.046 |
+| +attention → 只裁到图内（k = 1.0） | +0.007 [+0.003, +0.013] | 0.008 | 8/2/0 | +0.011 |
+| scale control → 方法 | +0.043 [+0.030, +0.059] | 0.002 | 10/0/0 | +0.084 |
+| 方法 → 真实 band | +0.044 [+0.021, +0.068] | 0.004 | 9/0/1 | +0.048 |
+| baseline → oracle 模型 + 真实 band | +0.129 [+0.111, +0.147] | 0.002 | 10/0/0 | +0.190 |
 
-**参数敏感性**（`runs_cv/bandbox/sweep.md`，测试列只看不选）：box-mask 的 union 20 组测试 F1 0.411–0.527，只有 **9 组**高于未修正的 0.502（s_seed 越高越差）；blend 14/20；replace 0/20。band 的 union 是 **20/20**（0.516–0.545）。
+**参数敏感性**（`runs_cv/bandbox/sweep.md`，测试列只看不选）：union 20 组测试 F1 0.516–0.545，**全部**高于未修正的 0.492；replace 20 组全部更差（0.245–0.410）；blend 2 组更好。scale control 在 k = 1.05–1.10 最好，k ≥ 1.3 开始变差。
 
-**定位质量和分层**（`runs_cv/strata_r13/summary.md`）
+**定位质量与分层**（`runs_cv/strata_r12/summary.md`，baseline → 方法）
 
-| 指标 | baseline → box-mask fusion | box-mask fusion → + 定框 | box-mask + 定框 → 方法 |
+| 指标 | A → B | Δ [95% CI] | 胜/负 |
 |---|---|---|---|
-| F1@IoU0.5 | +0.029 [+0.014, +0.044]，8/2 | +0.018 [−0.004, +0.039]，6/4 | **+0.025 [+0.002, +0.046]**，7/3 |
-| F1@IoU0.7 | +0.023 [+0.003, +0.045] | +0.031 [+0.017, +0.047] | +0.024 [−0.004, +0.050] |
-| recall（全部 222） | **+0.043**（多检出 9.6 个） | **−0.016**（少 3.6 个） | +0.035（多 7.7 个） |
-| GT 最佳 IoU"差一点"（0.3–0.5）比例 | 0.160 → 0.141 | 0.141 → **0.141**（没动） | 0.141 → **0.122** |
-| 命中框宽度比（预测 ÷ GT） | 0.959 → 0.970 | 0.970 → 0.980 | 0.980 → **1.006** |
-| FP/图（单目标 / 多目标图） | 0.68 / 0.87 → 0.68 / 0.91（没动） | → **0.49 / 0.73**（−0.20 / −0.18） | → 0.53 / 0.72（没动） |
-| recall：宽目标 ≥ 80 px（n = 76） | +0.041 [−0.025, +0.104] | +0.012 | **+0.092 [+0.043, +0.146]**，9/1 |
-| recall：窄目标 < 53 px（n = 74） | +0.032 | −0.031 | +0.012 |
-| recall：图里 1 个 / ≥ 2 个目标 | +0.067 / +0.032 | +0.033 / **−0.040** | +0.051 / +0.027 |
-| recall：alone / grouped | +0.051 / +0.032 | −0.016 / −0.016 | +0.057 / +0.004 |
+| F1@IoU 0.3 / 0.5 / 0.7 | 0.629 / 0.473 / 0.165 → 0.658 / 0.545 / 0.242 | +0.030 / +0.072 / +0.078 [+0.059, +0.095] | 9/1、10/0、10/0 |
+| near miss 比例 | 0.160 → 0.122 | −0.038 [−0.058, −0.021] | 1/9 |
+| 没检到（最佳 IoU < 0.3） | 0.378 → 0.347 | −0.031 [−0.074, +0.015] | 2/8 |
+| 命中框宽度比 / 高度比 | 0.96 / 0.96 → 1.01 / 0.99 | +0.047 / +0.034 | 9/1、9/1 |
+| FP/图（单目标 / 多目标图） | 0.68 / 0.87 → 0.53 / 0.72 | −0.14 / −0.15 | 8/2、7/3 |
+| recall：wide ≥ 80 px（76） | 0.439 → 0.584 | +0.145 [+0.095, +0.188] | 9/0 |
+| recall：narrow < 53 px（74） | 0.343 → 0.357 | +0.014 [−0.028, +0.051] | 6/3 |
+| recall：单目标图（72） | 0.451 → 0.603 | +0.151 [+0.115, +0.185] | 10/0 |
+| recall：多目标图（150） | 0.447 → 0.466 | +0.019 [−0.021, +0.056] | 7/3 |
+| recall：isolated / grouped | 0.446 / 0.453 → 0.537 / 0.473 | +0.091 / +0.020 | 9/1、7/3 |
 
-**判断**
+和 scale control 比，band 特有的 recall 增量几乎全在 wide（+0.093）和单目标图（+0.111，10/0）上；grouped 和多目标图是 −0.003 / −0.004。
+</details>
 
-1. **Round 12 的 +0.072 要拆成三块**：稠密头 fusion +0.029（框标注就够，而且比 band fusion 的 +0.019 还多一点）；稠密掩码定框 +0.018（不显著）；**band 形状特有 +0.025 [+0.002, +0.046]，7 胜 3 负，Wilcoxon 不显著**。"band 标注优于框标注"在方向上成立，效应 0.02–0.03，n = 10 刚够分辨出来。论文不能再把 +0.072 整个归于 band。
-2. **band 形状的价值在定框步骤，而且机制不同。** band 定框把"差一点"的目标从 14% 降到 12%、宽目标 recall +0.092、命中框宽度比回到 1.0，是真的把框扩对了；框掩码定框对"差一点"一个都没救（0.141 → 0.141），recall 反而 −0.016，F1 的 +0.018 来自阈值从 0.53 升到 0.63 砍掉 25 个 FP。原因可以从掩码本身理解：预测的填实框掩码边缘模糊、相邻目标连成一片，外接框不可靠，所以 union 只有 9/20 有效、验证集选到了折中的 blend；band 是细的高对比结构，翼伸到哪儿掩码就画到哪儿，20/20 有效。
-3. **对论文不利的发现必须写**：attention 分支加**任意**稠密监督都能多检出几个目标（box-mask +0.029、band +0.019，差别在噪声里），所以"用 band 监督 attention 提升检出"这句不能说；能说的只有"band 形状让定框步骤稳健、对宽的孤立双曲线有效"。
-4. **论文写法**：主表加 box-mask 对照两行（fusion、+ 定框），正文明确"方法比只用框标注的同结构对照高 +0.025 [+0.002, +0.046]"，并把 band 的额外标注成本和这 0.025 放在一起让读者判断。方法部分的卖点改为：定框规则在 band 上无需调参即稳健有效（20/20），在框掩码上不是。
-5. 还没做的公平性检查（见"下一步"）：后处理自由度对等的对照（框宽高分开放大）、调好的检测器（YOLOv8 on HBAT box）上还剩多少。
+**结论**
 
-**代码与输出**：`run_seeds.py` 的 `EXPS` 新增 `hbatbox_aug_boxmask`；`infer_bandbox.py` 新增源实验与变体 `hbatbox_aug_boxmask_bandbox`，`infer --exps` 只做指定实验、已有缓存跳过（`--force` 重做），`chosen.json` / `sweep.md` 按变体合并而不覆盖；`aggregate_cv.py` 新增 6 对；`diag_strata.py --out runs_cv/strata_r13`。日志：`runs_cv/launch_iwac1_q4.log`、`runs_cv/bandbox/infer_r13.log`、`build_r13.log`、`runs_cv/strata_r13.log`。
+1. box refinement 在严格协议下过硬：+0.072，10/10，CI 下界 +0.059，远大于换卡噪声（0.013）。（Round 14 之后需要和 stage 2 对照比较，见 Round 14。）
+2. 机制和诊断一致：near miss 16% → 12%，命中框宽度比 0.96 → 1.01，F1@IoU0.7 提升和 F1@0.5 一样大——改善的是定位。
+3. 必须如实报告 scale control：baseline 框统一放大 5% 就有 +0.029，band 特有 +0.043，集中在**宽的、孤立的**双曲线；**grouped targets 没有改善**（Voronoi split 在交叉的两翼上失效）。
+
+输出：`infer_bandbox.py infer` → `build`；`runs_cv/bandbox/{chosen.json, sweep.md}`；`runs_cv/strata_r12/`。
 
 ---
 
-## Round 14：按每条双曲线做 band attention（第二阶段）
+## Round 13：box-mask control，有多少是 band 形状的功劳
+
+**日期**：11-15 深夜
+
+**为什么做**：Round 12 的 +0.072 有另一种解释：逐像素的 dense head 本来就比中心格回归更会估尺寸，和双曲线形状无关；而且 HBAT box 按定义就是 band 的外接矩形，band 对这个 GT 有天然优势。需要一个只用框标注、没有 band 形状的 dense head 走完全相同的流程。
+
+**做了什么**：`hbatbox_aug_boxmask`：和 +attention 完全相同，唯一区别是 attention head 的监督目标换成**填实的 HBAT 框**（`masks_box/`，不需要新标注）。再做同样的 box refinement（60 组参数验证集选，选中 t = 0.6、s_seed = 0.3、blend）。
+
+**结果**（n = 10，HBAT box）
+
+| arm | 用到的标注 | F1 | precision / recall | F1@IoU0.7 |
+|---|---|---|---|---|
+| baseline | 框 | 0.473 ± 0.024 | 0.504 / 0.449 | 0.165 |
+| +attention（band） | 框 + band | 0.492 ± 0.031 | 0.531 / 0.473 | 0.170 |
+| box-mask control（fusion） | 框 | 0.502 ± 0.034 | 0.523 / 0.492 | 0.188 |
+| box-mask control + box refinement | 框 | 0.519 ± 0.030 | 0.579 / 0.476 | 0.218 |
+| **方法：+attention（band）+ box refinement** | 框 + band | **0.545 ± 0.025** | 0.600 / 0.510 | 0.242 |
+
+| A → B | ΔF1 [95% CI] | p | 胜/平/负 |
+|---|---|---|---|
+| baseline → box-mask fusion | +0.029 [+0.014, +0.044] | 0.014 | 8/0/2 |
+| band fusion → box-mask fusion | +0.010 [−0.012, +0.031] | 0.49 | 6/0/4 |
+| box-mask fusion → + box refinement | +0.018 [−0.004, +0.039] | 0.16 | 6/0/4 |
+| **box-mask 全流程 → 方法（band 形状特有）** | **+0.025 [+0.002, +0.046]** | **0.105** | **7/0/3** |
+
+<details><summary>补充配对、参数敏感性、定位质量与分层</summary>
+
+| A → B | ΔF1 [95% CI] | p | 胜/平/负 | ΔAP50 |
+|---|---|---|---|---|
+| baseline → box-mask 全流程 | +0.046 [+0.030, +0.063] | 0.002 | 10/0/0 | +0.082 |
+| scale control → box-mask 全流程 | +0.018 [−0.001, +0.039] | 0.16 | 7/0/3 | +0.036 |
+| box-mask 全流程 → 方法 | +0.025 [+0.002, +0.046] | 0.105 | 7/0/3 | +0.048 [+0.019, +0.074] |
+
+各 arm 的 AP50：baseline 0.352、+attention 0.391、box-mask fusion 0.398、box-mask 全流程 0.434、方法 0.482。
+
+**参数敏感性**（`runs_cv/bandbox/sweep.md`）：box-mask 的 union 20 组只有 **9 组**高于未修正的 0.502（s_seed 越高越差）；blend 14/20；replace 0/20。band 的 union 是 **20/20**。
+
+**定位质量与分层**（`runs_cv/strata_r13/summary.md`）
+
+| 指标 | baseline → box-mask fusion | box-mask fusion → + refinement | box-mask + refinement → 方法 |
+|---|---|---|---|
+| F1@IoU0.5 | +0.029 [+0.014, +0.044]，8/2 | +0.018 [−0.004, +0.039]，6/4 | +0.025 [+0.002, +0.046]，7/3 |
+| F1@IoU0.7 | +0.023 [+0.003, +0.045] | +0.031 [+0.017, +0.047] | +0.024 [−0.004, +0.050] |
+| recall（222） | +0.043（多 9.6 个） | −0.016（少 3.6 个） | +0.035（多 7.7 个） |
+| near miss 比例 | 0.160 → 0.141 | 0.141 → 0.141（没动） | 0.141 → 0.122 |
+| 命中框宽度比 | 0.959 → 0.970 | 0.970 → 0.980 | 0.980 → 1.006 |
+| FP/图（单 / 多目标图） | 0.68 / 0.87 → 0.68 / 0.91 | → 0.49 / 0.73 | → 0.53 / 0.72 |
+| recall：wide ≥ 80 px | +0.041 [−0.025, +0.104] | +0.012 | +0.092 [+0.043, +0.146]，9/1 |
+| recall：narrow < 53 px | +0.032 | −0.031 | +0.012 |
+| recall：单 / 多目标图 | +0.067 / +0.032 | +0.033 / −0.040 | +0.051 / +0.027 |
+| recall：isolated / grouped | +0.051 / +0.032 | −0.016 / −0.016 | +0.057 / +0.004 |
+</details>
+
+**结论**
+
+1. **Round 12 的 +0.072 拆成三块**：dense head fusion +0.029（框标注就够，比 band fusion 还多一点）；dense mask refinement +0.018（不显著）；**band 形状特有 +0.025 [+0.002, +0.046]，7/3，p = 0.11**。"band 标注优于框标注"在方向上成立，效应 0.02–0.03。
+2. band 形状的价值在 refinement 步骤：band 让 near miss 从 14% 降到 12%、wide recall +0.092；box-mask refinement 一个 near miss 都没救，F1 的 +0.018 来自 threshold 上移砍掉 FP。原因：预测的填实框边缘模糊、相邻目标连成一片；band 是细的高对比结构。
+3. 对论文不利、必须写的：attention 加**任意**dense 监督都能多检出几个目标，所以"用 band 监督 attention 提升检出"这句不能说。
+
+输出：`runs_cv/strata_r13/`；`runs_cv/bandbox/sweep.md`。
+
+---
+
+# 阶段 D：找 band 不可替代的地方
+
+## Round 14：stage 2，按每条双曲线做 attention
 
 **日期**：11-15 深夜 – 11-16 凌晨
 
-**为什么**：11-15 晚的讨论里用户指出，放大整张图解决不了问题——每条双曲线的尺度各不相同（数据集 2 的目标宽从 <53 px 到 ≥80 px，标注的 band 竖直厚度 7–41 px），在整张图上做 attention 时没有一个尺度对所有目标都合适。现有结果支持这一点：band 定框对宽目标 recall +0.145、对窄目标只有 +0.014（Round 12），真实 band 走 fusion 时反过来（窄目标 +0.068、中等宽度 −0.004，Round 11）。顺着这个思路，把 attention 从"整张图"换成"每条双曲线"：每个候选框单独裁出来、缩放到同一尺寸，在裁出的窗口上做 band attention。
+**为什么做**：你在 11-15 晚指出，整张图上没有一个尺度适合所有双曲线（目标宽 < 53 到 ≥ 80 px，band 厚 7–41 px）。现有结果支持这一点：box refinement 对 wide +0.145、对 narrow +0.014（Round 12）；真实 band 走 fusion 反过来（Round 11）。所以把 attention 从"整张图"换成"每条双曲线"：每个候选框裁出来、缩放到同一尺寸，再做 band attention。
 
-**事先约定的判断规则**（开跑前和用户确认）：带 band 的第二阶段要**明显高于"同样的第二阶段、只做框回归"的对照**（CI 不含 0，且差距大于 Round 13 的 +0.025），才走两阶段路线；否则退回整图方案的改进（成簇目标按形状分开 = Round 15，整图上把 band 预测好 = Round 16）。
+**事先约定的判断规则**（开跑前确认）：stage 2 的 band arm 要比 plain arm **高出 CI 不含 0、且 > +0.025**，才走两阶段路线；否则回到整图方案（Round 15、16）。
 
 **做了什么**（`stage2_instance.py`，第一阶段不重训）
-
-1. **候选框** = Round 4 baseline（`hbatbox_aug_none`）的全部预测（score ≥ 0.001，每图 ≤ 50 个），按 (fold, seed) 一一对应。
-2. **窗口**：以候选框为中心、宽高各放大 K = 2.5 倍，重采样成 96×96（先按 192×192 双线性采样再 2×2 平均；图外补 0）。K 的依据：第一阶段在合并验证集上的框（score ≥ 0.3、与某个 GT 的 IoU ≥ 0.1，n = 1271）里，K = 2.0 时 72% 的 GT 整个落在窗口内，2.5 时 82%，3.0 时 90%。
-3. **网络**：回归网络（3 个 ConvBlock + bottleneck + 两层全连接，1.78 M 参数）输入 [窗口, attention map] 两个通道，输出窗口归一化坐标的框。attention 分支是一个 U 形小网络（0.84 M），在 96×96 全分辨率上输出，不经过任何 pooling 就交给回归网络。监督目标是**窗口中间这一条**双曲线自己的 band（HBAT 每个目标各画一张；各目标 band 的并集与 `masks_band` 逐像素一致，已核对）。
-4. **训练**：只用训练折的 GT（每折约 157 个目标，其中 151 个有 band）。每个 epoch 每个目标抖动出 8 个窗口，抖动分布按第一阶段在合并验证集上的误差拟合：宽、高各乘一个 log-normal 因子（中位数 0.93、σ = 0.36，截断到 0.4–2.2），中心偏移 ~ N(0, 0.17 × 框宽) / N(0, 0.27 × 框高)。水平翻转；Adam、lr 5e-4、batch 64、100 epochs、bf16；loss = 框坐标 L1 + 0.7 ×（BCE + Dice）。
-5. **推理**：每个候选框修正两次（第二次以第一次的输出为中心重新裁窗口）；分数沿用第一阶段的，**本轮不重打分**；修正后做 NMS（修正会让几个候选框收敛到同一条双曲线上）。参数（迭代 1 / 2 次 × NMS IoU 不做 / 0.5 / 0.7）每个 arm 在 10 个 seed 的合并验证集 F1 均值上全局选一组，测试集不参与。
-6. **arm**（回归网络的结构、初始化、训练窗口完全相同，只有 attention 分支不同）：
+1. 候选框 = Round 4 baseline 的全部预测（score ≥ 0.001）。
+2. 窗口 = 候选框宽高各放大 2.5 倍，缩放到 96×96。
+3. 网络 = 回归网络（1.78 M 参数）输入 [窗口, attention map]，输出框；attention 分支是一个小 U-shaped 网络（0.84 M），在 96×96 上输出。监督目标是**窗口中间这一条**双曲线自己的 band。
+4. 训练只用训练折的 GT，每个目标按第一阶段的误差分布抖动出 8 个窗口；100 epochs。
+5. 推理：每个候选框修正两次，分数沿用第一阶段，修正后 NMS；参数在验证集上全局选。
+6. 五个 arm 只差 attention 分支：
 
 | arm | attention 分支 | 用到的标注 | 回答什么 |
 |---|---|---|---|
-| plain | 没有（第二通道恒为 0） | 框 | 普通的二阶段框回归能做到多少 |
-| unsup | 有，但不监督（λ = 0） | 框 | 多出来的参数量本身值多少 |
-| boxmask | 用填实的实例框监督 | 框 | 稠密监督但没有 band 形状（同 Round 13） |
-| **band** | 用这一条双曲线的 band 监督 | 框 + band | **方法** |
-| oracle | 不预测，直接给真实的实例 band（训练和推理都给） | — | 上限 |
+| plain | 没有 | 框 | 普通的二阶段框回归能做到多少 |
+| unsup | 有，不监督 | 框 | 多出来的参数量值多少 |
+| boxmask | 填实的实例框监督 | 框 | dense 监督但没有 band 形状 |
+| **band** | 这一条双曲线的 band 监督 | 框 + band | **方法** |
+| oracle | 直接给真实实例 band | — | upper bound |
 
-paired initialization：回归网络用 seed 初始化，50 个 (fold, seed) 上 5 个 arm 的初始化指纹全部一致；attention 分支用 seed + 10000；窗口的抖动、顺序、翻转由 (seed, fold) 决定，各 arm 相同。
+**结果**（n = 10，HBAT box）
 
-**训练轮数怎么定的**：只用对照组 plain、只看验证集窗口（fold 0–2 × seed 0–1，候选框修正后与 GT 的平均 IoU）：20 / 40 / 60 / 100 / 150 轮分别是 0.576 / 0.579 / 0.566 / 0.594 / 0.592，没有趋势，取 100。band 组在 60 / 100 / 150 轮是 0.585 / 0.608 / 0.596，同样 100 轮最高。其余超参数（K、窗口尺寸、抖动）都在看任何测试结果之前定下，没有调过。
-
-**结果**（5 折合并，n = 10 seeds，HBAT box；recall、F1@IoU0.7 来自 `runs_cv/strata_r14/summary.md`）
-
-| arm | 标注 | F1 | AP50 | F1@IoU0.7 | recall | 对 official box 的 F1 |
-|---|---|---|---|---|---|---|
-| baseline（第一阶段原样） | 框 | 0.473 ± 0.024 | 0.352 | 0.165 | 0.449 | 0.325 |
-| baseline + 只加 NMS（对照） | 框 | 0.469 ± 0.025 | 0.344 | — | — | — |
-| 第二阶段 plain | 框 | 0.632 ± 0.021 | 0.616 | 0.412 | 0.570 | 0.567 |
-| 第二阶段 unsup | 框 | 0.646 ± 0.021 | 0.620 | 0.428 | 0.611 | 0.571 |
-| 第二阶段 boxmask | 框 | 0.633 ± 0.022 | 0.612 | 0.415 | 0.567 | 0.536 |
-| **第二阶段 band（方法）** | 框 + band | **0.644 ± 0.010** | 0.627 | 0.421 | 0.582 | 0.569 |
-| 第二阶段 oracle（真实实例 band，上限） | — | 0.756 ± 0.013 | 0.811 | 0.749 | 0.721 | 0.572 |
-| boxmask，框取 attention map 的外接框 | 框 | 0.622 ± 0.014 | 0.603 | — | — | 0.573 |
-| band，框取 attention map 的外接框 | 框 + band | 0.611 ± 0.016 | 0.573 | — | — | 0.551 |
-| （参照）Round 12 方法：+attention + band 定框 | 框 + band | 0.545 ± 0.025 | 0.482 | 0.242 | 0.510 | 0.429 |
-| （参照）Round 12 上限：真实 band 定框 | — | 0.589 / 0.602 | 0.530 / 0.543 | 0.436 | 0.590 | — |
-
-| A → B | ΔF1 [95% CI] | Wilcoxon p | 胜/平/负 | ΔAP50 [95% CI] |
+| arm | 用到的标注 | F1 | F1@IoU0.7 | recall |
 |---|---|---|---|---|
-| baseline → 只加 NMS | −0.004 [−0.009, −0.000] | 0.131 | 3/0/7 | −0.008 [−0.013, −0.003] |
-| baseline → plain | **+0.159 [+0.137, +0.178]** | 0.002 | 10/0/0 | +0.263 [+0.240, +0.289] |
+| baseline（第一阶段原样） | 框 | 0.473 ± 0.024 | 0.165 | 0.449 |
+| **stage 2 plain** | 框 | **0.632 ± 0.021** | 0.412 | 0.570 |
+| stage 2 unsup | 框 | 0.646 ± 0.021 | 0.428 | 0.611 |
+| stage 2 boxmask | 框 | 0.633 ± 0.022 | 0.415 | 0.567 |
+| **stage 2 band（方法）** | 框 + band | **0.644 ± 0.010** | 0.421 | 0.582 |
+| stage 2 oracle | — | 0.756 ± 0.013 | 0.749 | 0.721 |
+| （参照）Round 12 方法 | 框 + band | 0.545 ± 0.025 | 0.242 | 0.510 |
+
+| A → B | ΔF1 [95% CI] | p | 胜/平/负 |
+|---|---|---|---|
+| **baseline → plain** | **+0.159 [+0.137, +0.178]** | 0.002 | 10/0/0 |
+| **plain → band（判断规则用的这一对）** | **+0.012 [−0.001, +0.024]** | 0.084 | 8/0/2 |
+| unsup → band | −0.001 [−0.014, +0.013] | 0.846 | 4/0/6 |
+| boxmask → band | +0.012 [−0.002, +0.024] | 0.105 | 7/0/3 |
+| Round 12 方法 → plain | +0.088 [+0.068, +0.106] | 0.002 | 10/0/0 |
+
+<details><summary>完整结果表、参数敏感性、窗口级诊断、分层 recall、第一阶段带 attention 的补充</summary>
+
+| arm | F1 | AP50 | F1@IoU0.7 | recall | 对 official box 的 F1 |
+|---|---|---|---|---|---|
+| baseline | 0.473 ± 0.024 | 0.352 | 0.165 | 0.449 | 0.325 |
+| baseline + 只加 NMS | 0.469 ± 0.025 | 0.344 | — | — | — |
+| plain | 0.632 ± 0.021 | 0.616 | 0.412 | 0.570 | 0.567 |
+| unsup | 0.646 ± 0.021 | 0.620 | 0.428 | 0.611 | 0.571 |
+| boxmask | 0.633 ± 0.022 | 0.612 | 0.415 | 0.567 | 0.536 |
+| band | 0.644 ± 0.010 | 0.627 | 0.421 | 0.582 | 0.569 |
+| oracle | 0.756 ± 0.013 | 0.811 | 0.749 | 0.721 | 0.572 |
+| boxmask，框取 attention map 外接框 | 0.622 ± 0.014 | 0.603 | — | — | 0.573 |
+| band，框取 attention map 外接框 | 0.611 ± 0.016 | 0.573 | — | — | 0.551 |
+| Round 12 方法 | 0.545 ± 0.025 | 0.482 | 0.242 | 0.510 | 0.429 |
+| Round 12 上限（真实 band） | 0.589 / 0.602 | 0.530 / 0.543 | 0.436 | 0.590 | — |
+
+| A → B | ΔF1 [95% CI] | p | 胜/平/负 | ΔAP50 [95% CI] |
+|---|---|---|---|---|
+| baseline → 只加 NMS | −0.004 [−0.009, −0.000] | 0.131 | 3/0/7 | −0.008 |
+| baseline → plain | +0.159 [+0.137, +0.178] | 0.002 | 10/0/0 | +0.263 [+0.240, +0.289] |
 | baseline → band | +0.171 [+0.156, +0.185] | 0.002 | 10/0/0 | +0.275 [+0.258, +0.292] |
-| **plain → band（判断规则用的这一对）** | **+0.012 [−0.001, +0.024]** | 0.084 | 8/0/2 | +0.012 [−0.005, +0.026] |
-| unsup → band（同结构，只差有没有 band 监督） | −0.001 [−0.014, +0.013] | 0.846 | 4/0/6 | +0.008 [−0.010, +0.026] |
-| boxmask → band（band 形状特有的部分） | +0.012 [−0.002, +0.024] | 0.105 | 7/0/3 | +0.015 [−0.002, +0.031] |
+| plain → band | +0.012 [−0.001, +0.024] | 0.084 | 8/0/2 | +0.012 [−0.005, +0.026] |
+| unsup → band | −0.001 [−0.014, +0.013] | 0.846 | 4/0/6 | +0.008 [−0.010, +0.026] |
+| boxmask → band | +0.012 [−0.002, +0.024] | 0.105 | 7/0/3 | +0.015 [−0.002, +0.031] |
 | plain → unsup | +0.013 [+0.002, +0.023] | 0.049 | 8/0/2 | +0.004 [−0.009, +0.015] |
 | plain → boxmask | +0.000 [−0.009, +0.010] | 1.000 | 5/0/5 | −0.003 |
 | band → oracle | +0.112 [+0.106, +0.119] | 0.002 | 10/0/0 | +0.184 [+0.171, +0.197] |
-| band → band，框取 attention map 外接框 | −0.034 [−0.043, −0.024] | 0.002 | 0/0/10 | −0.054 |
+| band → band 框取外接框 | −0.034 [−0.043, −0.024] | 0.002 | 0/0/10 | −0.054 |
 | Round 12 方法 → plain | +0.088 [+0.068, +0.106] | 0.002 | 10/0/0 | +0.134 [+0.113, +0.155] |
-| Round 13 box-mask 对照全流程 → plain | +0.113 [+0.093, +0.135] | 0.002 | 10/0/0 | +0.181 |
+| Round 13 box-mask 全流程 → plain | +0.113 [+0.093, +0.135] | 0.002 | 10/0/0 | +0.181 |
 
-**参数敏感性**（`runs_cv/s2/sweep.md`，测试列只看不选）：4 个学习的 arm 都选到 NMS IoU 0.5；不做 NMS 时测试 F1 是 0.58–0.59，做了是 0.63–0.65；迭代 1 次和 2 次差别在 0.01 以内。baseline 的框不修正、只加同样的 NMS 是 0.469，所以 +0.16 来自修正，不是来自 NMS 本身。
+**参数敏感性**（`runs_cv/s2/sweep.md`）：4 个学习的 arm 都选到 NMS IoU 0.5；不做 NMS 时测试 F1 0.58–0.59，做了 0.63–0.65；迭代 1 次和 2 次差别 < 0.01。baseline 只加 NMS 是 0.469，所以 +0.16 来自修正，不是 NMS。
 
-**窗口级诊断**（`runs_cv/s2/diag.md`；测试集里第一阶段 score ≥ 0.3 且与某个 GT 的 IoU ≥ 0.1 的候选框，每个 seed 约 266 个）
+**训练轮数**：只用 plain、只看验证集窗口：20 / 40 / 60 / 100 / 150 轮平均 IoU 0.576 / 0.579 / 0.566 / 0.594 / 0.592，取 100；band 在 60 / 100 / 150 轮是 0.585 / 0.608 / 0.596，同样 100 最高。其余超参（窗口 2.5 倍、96×96、抖动分布）在看任何测试结果前定下。
 
-| arm | 候选框与 GT 的平均 IoU：修正前 → 修正 2 次 | IoU ≥ 0.5 的比例 | IoU ≥ 0.7 的比例 | 预测 mask 的 IoU：全部 / 窄 / 中 / 宽 |
+**窗口级诊断**（`runs_cv/s2/diag.md`，测试集 score ≥ 0.3 且与 GT IoU ≥ 0.1 的候选框）
+
+| arm | 平均 IoU：修正前 → 后 | IoU ≥ 0.5 比例 | IoU ≥ 0.7 比例 | 预测 mask IoU：全部 / narrow / medium / wide |
 |---|---|---|---|---|
 | plain | 0.475 → 0.652 | 0.474 → 0.795 | 0.150 → 0.503 | — |
 | unsup | 0.475 → 0.656 | 0.474 → 0.803 | 0.150 → 0.517 | — |
-| boxmask | 0.475 → 0.647 | 0.474 → 0.784 | 0.150 → 0.496 | 0.645 / 0.576 / 0.658 / 0.668（与实例框） |
-| band | 0.475 → 0.656 | 0.474 → 0.794 | 0.150 → 0.498 | **0.481 / 0.477 / 0.522 / 0.457**（与实例 band） |
+| boxmask | 0.475 → 0.647 | 0.474 → 0.784 | 0.150 → 0.496 | 0.645 / 0.576 / 0.658 / 0.668 |
+| band | 0.475 → 0.656 | 0.474 → 0.794 | 0.150 → 0.498 | 0.481 / 0.477 / 0.522 / 0.457 |
 | oracle | 0.475 → 0.957 | 0.474 → 0.992 | 0.150 → 0.990 | — |
 
 **分层 recall**（`runs_cv/strata_r14/summary.md`）
 
-| 分层（n GT） | baseline | plain | band | oracle | plain → band [95% CI] |
+| 分层（n） | baseline | plain | band | oracle | plain → band [95% CI] |
 |---|---|---|---|---|---|
 | 全部（222） | 0.449 | 0.570 | 0.582 | 0.721 | +0.013 [−0.019, +0.040] |
-| 图里 1 个目标（72） | 0.451 | **0.738** | 0.736 | 0.807 | −0.001 [−0.047, +0.037] |
-| 图里 ≥ 2 个目标（150） | 0.447 | 0.489 | 0.509 | 0.680 | +0.019 [−0.011, +0.045] |
-| official box 只套这一条（129） | 0.446 | 0.654 | 0.667 | 0.758 | +0.013 [−0.033, +0.051] |
-| **official box 套着 ≥ 2 条，即成簇（93）** | 0.453 | **0.453** | 0.465 | **0.670** | +0.012 [−0.014, +0.034] |
-| 窄 < 53 px（74） | 0.343 | 0.418 | 0.431 | 0.591 | +0.014 [−0.023, +0.045] |
-| 中 53–80 px（72） | 0.567 | 0.656 | 0.685 | 0.799 | +0.029 [−0.007, +0.064] |
-| 宽 ≥ 80 px（76） | 0.439 | 0.637 | 0.633 | 0.775 | −0.004 [−0.034, +0.024] |
+| 单目标图（72） | 0.451 | 0.738 | 0.736 | 0.807 | −0.001 [−0.047, +0.037] |
+| 多目标图（150） | 0.447 | 0.489 | 0.509 | 0.680 | +0.019 [−0.011, +0.045] |
+| isolated（129） | 0.446 | 0.654 | 0.667 | 0.758 | +0.013 [−0.033, +0.051] |
+| **grouped（93）** | 0.453 | **0.453** | 0.465 | **0.670** | +0.012 [−0.014, +0.034] |
+| narrow（74） | 0.343 | 0.418 | 0.431 | 0.591 | +0.014 [−0.023, +0.045] |
+| medium（72） | 0.567 | 0.656 | 0.685 | 0.799 | +0.029 [−0.007, +0.064] |
+| wide（76） | 0.439 | 0.637 | 0.633 | 0.775 | −0.004 [−0.034, +0.024] |
 
-plain 相对 baseline：F1@IoU0.7 从 0.165 到 0.412，"差一点"（最佳 IoU 0.3–0.5）的 GT 从 16% 降到 10%，每图 FP 从 0.68 / 0.87 降到 0.28 / 0.53（单目标图 / 多目标图）。
+plain 相对 baseline：near miss 16% → 10%，每图 FP 0.68 / 0.87 → 0.28 / 0.53（单目标图 / 多目标图）。
 
-**补充：第一阶段带 attention 时再接同样的第二阶段**（`stage2_instance.py --src hbatbox_aug_abs` / `--src hbatbox_aug_boxmask`，都只做 plain 的框回归）
+**第一阶段带 attention 时再接 stage 2 plain**
 
-| 第一阶段 | + 第二阶段 plain 的 F1 | 相对 baseline + 第二阶段 [95% CI] | 胜/平/负 |
+| 第一阶段 | + stage 2 plain | 相对 baseline + stage 2 | 胜/平/负 |
 |---|---|---|---|
-| baseline | 0.632 ± 0.021 | — | — |
-| +attention（band 监督，Round 4） | 0.656 ± 0.018 | +0.024 [+0.009, +0.041]，p = 0.027 | 9/0/1 |
-| +attention（框掩码监督，Round 13） | 0.662 | +0.030 [+0.008, +0.047]，p = 0.049 | 9/0/1 |
+| baseline | 0.632 | — | — |
+| +attention（band） | 0.656 ± 0.018 | +0.024 [+0.009, +0.041]，p = 0.027 | 9/0/1 |
+| +attention（box-mask） | 0.662 | +0.030 [+0.008, +0.047]，p = 0.049 | 9/0/1 |
 
-第一阶段的 attention 多检出几个目标的效果（Round 11）在框修好之后仍然保留，而且比原来的 +0.019 更稳（9 胜 1 负）。但它不是 band 形状特有的：框掩码监督的 attention 给出同样的增量（框掩码 → band：−0.006 [−0.018, +0.006]），和 Round 13 的结论一致。在带 attention 的第一阶段上，第二阶段的 band arm 相对 plain 仍然是 −0.002 [−0.014, +0.011]。
+第一阶段 attention 多检出几个目标的效果在框修好之后仍然保留，但 band 和 box-mask 没区别（−0.006 [−0.018, +0.006]）。
+</details>
 
-**判断**
+**结论**
 
-1. **判断规则不满足：band 监督在第二阶段没有额外作用。** band 比"只做框回归"的 plain 高 +0.012 [−0.001, +0.024]（CI 含 0，不到约定的 +0.025）；和同结构但不监督的 unsup 相比是 −0.001；比 boxmask 高 +0.012（CI 含 0）。任何分层里都没有 CI 不含 0 的 band 增量。按约定退回整图方案的改进（Round 15、16）。
-2. **第二阶段本身是整个项目里最大的一次提升：+0.159，只需要框标注。** 它比 Round 12 的方法（+attention + band 定框）高 +0.088，也高于"真实 band 定框"的上限（0.589 / 0.602）。也就是说 baseline 的框画不准是第一阶段结构的问题（只在中心格回归宽高，每个 epoch 只有约 150 个监督点），加一个普通的框回归阶段就能修好，不需要 band。**这对论文是不利的**：Round 12 的 +0.072 里"band 告诉了框该多大"这部分，审稿人可以问"为什么不直接加一个框回归阶段"，而那样做得更好。
-3. **用户关于尺度的判断是对的，但它不再是决定因素。** 归一化之后 band 的预测质量不再随目标大小变化（band IoU 窄 0.48 / 中 0.52 / 宽 0.46，整图上是 0.38，且窄目标最差）。可是回归网络直接从图像里学到的，和它从预测的 band 里读到的一样多：四个学习的 arm 在窗口级的 IoU 都是 0.65，命中率都是 0.79–0.80。
-4. **为什么 band 帮不上：GT 框就是 band 的外接矩形。** 框的四条边由 band 的顶点、slope 和 span 决定，"两翼到哪里结束"是框和 band 共同的难点，band 监督并没有让这件事更容易学；band 多出来的信息（曲线怎么弯）对框的四条边没有用。oracle 的 0.756 说明信息确实在 band 里，但这个上限对框掩码同样成立（真实的框掩码就是答案本身），不是 band 形状特有的。用 attention map 的外接框直接当输出比回归还差（0.611，10 个 seed 全负），因为预测的 band 仍然画不全。
-5. **剩下的瓶颈是成簇目标。** 单目标图的 recall 从 0.451 到 0.738，而成簇目标（93 个，占 42%）是 0.453 → 0.453，一个都没多检出；band arm 也只有 0.465。真实的实例 band 在这一层是 0.670（+0.205）。成簇时一个候选框里有好几条交叉的双曲线，回归网络不知道该输出哪一条，学出来的实例 band 同样分不开。Round 15 针对的就是这一层。
+1. **判断规则不满足**：band 比 plain 只高 +0.012（CI 含 0），比同结构不监督的 unsup 是 −0.001。按约定回到整图方案（Round 15、16）。
+2. **stage 2 本身是全项目最大的提升：+0.159，只需框标注**，比 Round 12 的方法高 +0.088，也高于"真实 band box refinement"的上限（0.589 / 0.602）。baseline 框画不准是第一阶段结构的问题，普通的框回归就能修，**"band 告诉了框该多大"这个解释不再站得住**。这对论文不利：审稿人会问"为什么不直接加一个框回归阶段"。
+3. 尺度归一化确实让 band 质量不再随目标大小变化（narrow / medium / wide 0.48 / 0.52 / 0.46），但回归网络直接从图像学到的和从 band 读到的一样多。原因：GT 框就是 band 的外接矩形，"两翼到哪结束"是框和 band 共同的难点。
+4. **剩下的瓶颈是 grouped targets**：单目标图 recall 0.451 → 0.738，grouped 0.453 → 0.453，一个没多检出。
 
-**代码与输出**：`stage2_instance.py`（`train` / `build` / `diag`；`--src` 换第一阶段）；原始输出 `runs_cv/s2_cache/`（不入库）；8 个新实验 `runs_cv/ds2/hbatbox_aug_none_{nms,s2plain,s2unsup,s2boxmask,s2band,s2oracle,s2boxmask_mb,s2band_mb}/`；`runs_cv/s2/{chosen.json, sweep.md, diag.md, diag.json, launch_iwac1.log, launch_iwac2.log, build.log}`；`aggregate_cv.py` 新增配对；`diag_strata.py --out runs_cv/strata_r14`。执行：IWAC1 跑 fold 0–2、IWAC2 跑 fold 3–4（IWAC2 上用独立的镜像目录 `~/s2_mirror_r14/`，不动它的仓库；抽查 f3 seed0 的 plain、band 两个 arm，两台机器的输出 md5 相同），250 个训练共 41 分钟。
+输出：`runs_cv/ds2/hbatbox_aug_none_{nms, s2plain, s2unsup, s2boxmask, s2band, s2oracle, ...}/`；`runs_cv/s2/`；`runs_cv/strata_r14/`。
 
 ---
 
-## Round 15：用双曲线的形状把成簇目标分开（拟合定框）
+## Round 15：hyperbola fit，用形状分开 grouped targets
 
 **日期**：11-16 凌晨
 
-**为什么**：Round 14 的判断规则没过，按约定退回整图方案，先做"成簇目标用形状分开"。Round 14 的分层结果正好说明这一步该做：成簇目标（official box 里套着 ≥ 2 条双曲线，93 / 222 个 GT）是所有方法共同的瓶颈——band 定框（Round 12）在这一层只有 +0.015，第二阶段框回归 +0.000。再看上限：给**真实的** band，Round 12 的定框规则在这一层也只有 +0.069（0.458 → 0.527），而知道"哪条 band 属于哪个目标"时（Round 14 的 oracle）是 +0.205。问题出在规则上：Round 12 把 band 像素按"离哪个检测框中心最近"切开（Voronoi），而相邻双曲线的两翼互相交叉，按距离切一定切错。
+**为什么做**：Round 14 规则没过，回到整图方案。grouped targets 是所有方法共同的瓶颈；而知道"哪条 band 属于哪个目标"时（Round 14 oracle）grouped recall +0.205。问题在 Voronoi split：相邻双曲线的两翼互相交叉，按距离切一定切错。每条双曲线自己是一条参数曲线，沿着曲线走就能穿过交叉点。
 
-**做了什么**（`fit_hyperbola.py`，不重训；`infer_bandbox.py` 新增 `prefit` 阶段和 `*_fitbox` 变体）
+**做了什么**（`fit_hyperbola.py`，不重训）：对每个 score ≥ s_seed 的检测：
+1. 用 HBAT 的双曲线模型，只搜顶点 (x_v, y_v) 和 slope；顶点在检测框上边附近搜，slope 取 13 个值（1–6）。
+2. 每条候选曲线从顶点向左右走，只要还在 band 里就继续（允许 3 列缺口）；打分 = 曲线贴着 band 中心线走得多远。取最高分。
+3. 新框 = 被支持那一段曲线的外接框，上下各加半个 band 厚度；union / replace / blend；之后 NMS。
 
-每条双曲线自己是一条参数曲线，沿着曲线走就能穿过交叉点。对每个分数 ≥ s_seed 的检测：
+规则只用真实 band、只看验证集迭代了三版（候选框平均 IoU 0.592 → 0.623 → 0.689 → 0.757）。参数 180 组在验证集上全局选。
 
-1. 用 HBAT 的双曲线模型 y_c(x) = y_v + a·(√(1 + ((x − x_v)/b)²) − 1)，a = y_v，b = a / slope，自由度只有顶点 (x_v, y_v) 和 slope。
-2. 在检测框上边中点附近搜索顶点（x：框中心 ± max(0.5 框宽, 16 px)；y：框上边 −8 px 到 +max(0.5 框高, 16 px)），slope 取 13 个值（1–6，几何级数；数据集 2 标注的 slope 是 1.2–5.0）。
-3. 每条候选曲线从顶点向左右走，只要曲线还落在 band 里就继续（允许 3 列的缺口）。打分 = 沿被支持的这一段，把"曲线所在像素到 band 上下边缘的竖直距离"（封顶 12 px）加起来：曲线越贴着 band 的中心线、走得越远，分越高。取分最高的曲线。
-4. 带框 = 被支持的那一段曲线的外接框，上下各加半个 band 厚度（厚度从 band 上量）。被支持的列数 < 12 则保留原框。
-5. 新框 = replace / union / blend；分数不变；之后做 NMS（拟合会让两个检测收敛到同一条双曲线上）。
+**结果**（n = 10，HBAT box）
 
-和 Voronoi 的区别：不做像素的排他划分，两条双曲线可以共用交叉处的像素；每个检测只沿自己的曲线取范围。这一步只对 band 形状的掩码有意义——填实的框掩码里任何曲线都"被支持"，规则退化成取掩码的范围，所以框掩码对照也用同一规则跑了一遍。
+| 检测 + band 来源 | 切分规则 | F1 | F1@IoU0.7 | recall：全部 / grouped |
+|---|---|---|---|---|
+| +attention + **预测** band | Voronoi（Round 12） | 0.545 | 0.242 | 0.510 / 0.473 |
+| | **hyperbola fit** | 0.530 | 0.227 | 0.468 / 0.412 |
+| +attention + **真实** band | Voronoi | 0.589 | 0.436 | 0.590 / 0.527 |
+| | **hyperbola fit** | **0.658** | 0.459 | 0.652 / **0.574** |
+| oracle 模型 + 真实 band | hyperbola fit | 0.719 | 0.452 | 0.732 / 0.642 |
+| （参照）+attention + stage 2 plain（不用 band，同一个第一阶段） | — | 0.656 | 0.418 | 0.607 / 0.474 |
 
-**规则是怎么调出来的**（只用真实 band、只看验证集候选框；`+attention` 的验证预测里 score ≥ 0.3 且与某个 GT 的 IoU ≥ 0.1 的 250 个）：
+| A → B | ΔF1 [95% CI] | 胜/平/负 |
+|---|---|---|
+| **真实 band：Voronoi → fit** | **+0.069 [+0.054, +0.084]** | 10/0/0 |
+| **预测 band：Voronoi → fit** | **−0.015 [−0.032, +0.002]** | 4/0/6 |
+| 预测 band → 真实 band（都用 fit） | +0.128 [+0.109, +0.153] | 10/0/0 |
+| box-mask + fit → band + fit | +0.024 [−0.001, +0.052] | 6/0/4 |
+| **stage 2 plain → 真实 band + fit**（同一个第一阶段） | **+0.002 [−0.009, +0.017]**；grouped recall **+0.100 [+0.068, +0.129]，9/1** | 5/0/5 |
 
-| 版本 | 候选框与 GT 的平均 IoU | IoU ≥ 0.5 的比例 | IoU ≥ 0.7 的比例 |
+<details><summary>完整结果、规则迭代、分层 recall</summary>
+
+| 检测 + band 来源 | 规则 | F1 | AP50 | F1@IoU0.7 | recall 全部 / grouped |
+|---|---|---|---|---|---|
+| +attention，不修正 | — | 0.492 ± 0.031 | 0.391 | 0.170 | 0.473 / 0.458 |
+| +attention + 预测 band | Voronoi | 0.545 ± 0.025 | 0.482 | 0.242 | 0.510 / 0.473 |
+| | Voronoi + NMS 选项 | 0.546 ± 0.026 | 0.481 | — | — |
+| | fit | 0.530 ± 0.039 | 0.449 | 0.227 | 0.468 / 0.412 |
+| box-mask 模型 + 预测框掩码 | Voronoi | 0.519 ± 0.030 | 0.434 | 0.218 | — |
+| | fit | 0.506 ± 0.030 | 0.403 | 0.199 | — |
+| +attention + 真实 band | Voronoi | 0.589 ± 0.038 | 0.530 | 0.436 | 0.590 / 0.527 |
+| | Voronoi + NMS 选项 | 0.588 ± 0.038 | 0.529 | — | — |
+| | fit | 0.658 ± 0.023 | 0.672 | 0.459 | 0.652 / 0.574 |
+| oracle 模型 + 真实 band | Voronoi | 0.602 ± 0.021 | 0.543 | 0.329 | 0.605 / 0.575 |
+| | fit | 0.719 ± 0.020 | 0.743 | 0.452 | 0.732 / 0.642 |
+| +attention + stage 2 plain | — | 0.656 ± 0.018 | 0.625 | 0.418 | 0.607 / 0.474 |
+| baseline + stage 2 plain | — | 0.632 ± 0.021 | 0.616 | 0.412 | 0.570 / 0.453 |
+| stage 2 oracle | — | 0.756 ± 0.013 | 0.811 | 0.749 | 0.721 / 0.670 |
+
+| A → B | ΔF1 [95% CI] | p | 胜/平/负 |
+|---|---|---|---|
+| 真实 band：Voronoi → fit（+attention 检测） | +0.069 [+0.054, +0.084] | 0.002 | 10/0/0 |
+| 真实 band：Voronoi → fit（oracle 模型检测） | +0.117 [+0.098, +0.134] | 0.002 | 10/0/0 |
+| 真实 band：Voronoi + NMS → fit | +0.070 [+0.056, +0.084] | 0.002 | 10/0/0 |
+| 预测 band：Voronoi → fit | −0.015 [−0.032, +0.002] | 0.275 | 4/0/6 |
+| 预测 band：Voronoi + NMS → fit | −0.016 [−0.033, +0.001] | 0.131 | 3/0/7 |
+| 预测 band → 真实 band（fit） | +0.128 [+0.109, +0.153] | 0.002 | 10/0/0 |
+| box-mask：Voronoi → fit | −0.014 [−0.030, +0.001] | 0.275 | 4/0/6 |
+| box-mask + fit → band + fit | +0.024 [−0.001, +0.052] | 0.131 | 6/0/4 |
+| +attention + stage 2 plain → 真实 band + fit | +0.002 [−0.009, +0.017] | 0.922 | 5/0/5 |
+| baseline + stage 2 plain → 真实 band + fit | +0.026 [+0.015, +0.037] | 0.002 | 10/0/0 |
+
+**规则迭代**（只用真实 band、只看验证集 250 个候选框）
+
+| 版本 | 平均 IoU | IoU ≥ 0.5 | IoU ≥ 0.7 |
 |---|---|---|---|
 | 修正前 | 0.486 | — | — |
-| Voronoi + 真实 band（replace） | 0.592 | 0.604 | 0.448 |
-| 拟合 v1：按"落在 band 里的弧长"打分 | 0.623 | 0.768 | 0.468 |
-| 拟合 v2：按"到 band 上下边缘的距离"打分 | 0.689 | 0.772 | 0.712 |
-| 拟合 v3（最终）：再把两端因缺口容忍多出的 3 列收回 | **0.757** | **0.792** | **0.712** |
+| Voronoi + 真实 band | 0.592 | 0.604 | 0.448 |
+| fit v1：按"落在 band 里的弧长"打分 | 0.623 | 0.768 | 0.468 |
+| fit v2：按"到 band 上下边缘的距离"打分 | 0.689 | 0.772 | 0.712 |
+| fit v3（最终）：收回两端缺口多出的 3 列 | 0.757 | 0.792 | 0.712 |
 
-v1 的曲线会贴着 band 的上边缘走（拟合出的顶点系统性偏高约 7 px、slope 偏大 10%），框普遍高出一个 band 厚度；v2 之后顶点误差的中位数是 −0.2 px、slope 比值 0.98。v3 里仍有 17% 的候选框拟合后 IoU < 0.5，其中 77% 是顶点横向偏了 8 px 以上（检测框本来就落在相邻的双曲线上）。之后在验证集上发现拟合定框需要 NMS（真实 band、replace：合并验证 F1 0.638 → 0.680），而 Voronoi 定框不需要（0.538 → 0.542），于是把 NMS（不做 / 0.5 / 0.7）加进参数网格，并给 Voronoi 也补了同样带 NMS 选项的对照变体。
-
-**参数选择**：和 Round 12 相同的 (t, s_seed, mode) 网格 × NMS，共 180 组（真实 band 时 36 组），在 10 个 seed 的合并验证集 F1 均值上全局选一组；测试集不参与。
-
-**结果**（5 折合并，n = 10 seeds，HBAT box；recall 和分层来自 `runs_cv/strata_r15/summary.md`）
-
-| 检测来源 + band 来源 | 定框规则 | F1 | AP50 | F1@IoU0.7 | recall：全部 / 成簇（93） |
-|---|---|---|---|---|---|
-| +attention，不定框 | — | 0.492 ± 0.031 | 0.391 | 0.170 | 0.473 / 0.458 |
-| +attention + **预测的** band | Voronoi（Round 12 方法） | 0.545 ± 0.025 | 0.482 | 0.242 | 0.510 / 0.473 |
-| | Voronoi + NMS 选项（对照） | 0.546 ± 0.026 | 0.481 | — | — |
-| | **拟合（本轮）** | 0.530 ± 0.039 | 0.449 | 0.227 | 0.468 / 0.412 |
-| box-mask 模型 + 预测的框掩码 | Voronoi（Round 13 对照） | 0.519 ± 0.030 | 0.434 | 0.218 | — |
-| | 拟合 | 0.506 ± 0.030 | 0.403 | 0.199 | — |
-| +attention + **真实** band | Voronoi（Round 12 上限） | 0.589 ± 0.038 | 0.530 | 0.436 | 0.590 / 0.527 |
-| | Voronoi + NMS 选项（对照） | 0.588 ± 0.038 | 0.529 | — | — |
-| | **拟合** | **0.658 ± 0.023** | 0.672 | 0.459 | 0.652 / **0.574** |
-| oracle 模型 + 真实 band | Voronoi（Round 12 上限） | 0.602 ± 0.021 | 0.543 | 0.329 | 0.605 / 0.575 |
-| | **拟合** | **0.719 ± 0.020** | 0.743 | 0.452 | 0.732 / 0.642 |
-| （参照）**+attention** + 第二阶段 plain（Round 14 补充，不用 band；和上面几行是同一个第一阶段） | — | 0.656 ± 0.018 | 0.625 | 0.418 | 0.607 / 0.474 |
-| （参照）baseline + 第二阶段 plain（Round 14，不用 band） | — | 0.632 ± 0.021 | 0.616 | 0.412 | 0.570 / 0.453 |
-| （参照）第二阶段 oracle（Round 14） | — | 0.756 ± 0.013 | 0.811 | 0.749 | 0.721 / 0.670 |
-
-| A → B | ΔF1 [95% CI] | Wilcoxon p | 胜/平/负 |
-|---|---|---|---|
-| **真实 band：Voronoi → 拟合**（+attention 的检测） | **+0.069 [+0.054, +0.084]** | 0.002 | 10/0/0 |
-| 真实 band：Voronoi → 拟合（oracle 模型的检测） | +0.117 [+0.098, +0.134] | 0.002 | 10/0/0 |
-| 真实 band：Voronoi + NMS → 拟合 | +0.070 [+0.056, +0.084] | 0.002 | 10/0/0 |
-| **预测 band：Voronoi → 拟合** | **−0.015 [−0.032, +0.002]** | 0.275 | 4/0/6 |
-| 预测 band：Voronoi + NMS → 拟合 | −0.016 [−0.033, +0.001] | 0.131 | 3/0/7 |
-| 预测 band → 真实 band（都用拟合） | +0.128 [+0.109, +0.153] | 0.002 | 10/0/0 |
-| 框掩码：Voronoi → 拟合 | −0.014 [−0.030, +0.001] | 0.275 | 4/0/6 |
-| 框掩码 + 拟合 → band + 拟合 | +0.024 [−0.001, +0.052] | 0.131 | 6/0/4 |
-| **+attention + 第二阶段 plain（不用 band）→ +attention + 真实 band + 拟合**（同一个第一阶段） | **+0.002 [−0.009, +0.017]** | 0.922 | 5/0/5 |
-| baseline + 第二阶段 plain → +attention + 真实 band + 拟合（第一阶段不同，含第一阶段 attention 的 +0.024） | +0.026 [+0.015, +0.037] | 0.002 | 10/0/0 |
-| Voronoi：不带 → 带 NMS 选项（预测 band） | +0.001 [−0.001, +0.003] | 0.432 | 8/0/2 |
-| Voronoi：不带 → 带 NMS 选项（框掩码） | +0.003 [−0.010, +0.017] | 0.922 | 5/0/5 |
+v1 的曲线贴着 band 上边缘走（顶点偏高约 7 px）；v2 之后顶点误差中位数 −0.2 px。之后在验证集上发现 fit 需要 NMS（0.638 → 0.680），Voronoi 不需要，于是 NMS 加进网格，并给 Voronoi 补了带 NMS 选项的对照。
 
 **分层 recall**
 
-| 分层（n GT） | 真实 band：Voronoi → 拟合 | +attention + 第二阶段 plain → 真实 band + 拟合（同一个第一阶段） | 预测 band：Voronoi → 拟合 |
+| 分层（n） | 真实 band：Voronoi → fit | stage 2 plain → 真实 band + fit | 预测 band：Voronoi → fit |
 |---|---|---|---|
 | 全部（222） | 0.590 → 0.652，+0.062 [+0.043, +0.080] | 0.607 → 0.652，+0.045 [+0.014, +0.067] | 0.510 → 0.468，−0.043 [−0.070, −0.015] |
-| **成簇（93）** | 0.527 → 0.574，+0.047 [+0.016, +0.072] | **0.474 → 0.574，+0.100 [+0.068, +0.129]，9/0/1** | 0.473 → 0.412，−0.061 [−0.090, −0.031] |
-| official box 只套这一条（129） | 0.635 → 0.708，+0.073 | 0.703 → 0.708，+0.005 [−0.029, +0.030] | 0.537 → 0.508，−0.029 |
-| 图里 ≥ 2 个目标（150） | 0.549 → 0.597，+0.048 | 0.520 → 0.597，+0.077 [+0.041, +0.104] | 0.466 → 0.417，−0.049 |
-| 图里 1 个目标（72） | 0.675 → 0.767，+0.092 | 0.789 → 0.767，−0.022 [−0.046, −0.003] | 0.603 → 0.572，−0.031 |
-| 宽 ≥ 80 px（76） | 0.618 → 0.725，+0.107 | 0.664 → 0.725，+0.061 [+0.041, +0.080] | 0.584 → 0.501，−0.083 |
-| 窄 < 53 px（74） | 0.472 → 0.484，+0.012 | 0.470 → 0.484，+0.014 [−0.024, +0.051] | 0.357 → 0.370，+0.014 |
+| **grouped（93）** | 0.527 → 0.574，+0.047 [+0.016, +0.072] | **0.474 → 0.574，+0.100 [+0.068, +0.129]，9/0/1** | 0.473 → 0.412，−0.061 [−0.090, −0.031] |
+| isolated（129） | 0.635 → 0.708，+0.073 | 0.703 → 0.708，+0.005 [−0.029, +0.030] | 0.537 → 0.508，−0.029 |
+| 多目标图（150） | 0.549 → 0.597，+0.048 | 0.520 → 0.597，+0.077 [+0.041, +0.104] | 0.466 → 0.417，−0.049 |
+| 单目标图（72） | 0.675 → 0.767，+0.092 | 0.789 → 0.767，−0.022 [−0.046, −0.003] | 0.603 → 0.572，−0.031 |
+| wide（76） | 0.618 → 0.725，+0.107 | 0.664 → 0.725，+0.061 [+0.041, +0.080] | 0.584 → 0.501，−0.083 |
+| narrow（74） | 0.472 → 0.484，+0.012 | 0.470 → 0.484，+0.014 [−0.024, +0.051] | 0.357 → 0.370，+0.014 |
 
-中间一列的整体指标（`runs_cv/strata_r15_fair/summary.md`）：F1@IoU0.5 0.656 → 0.658（+0.002 [−0.009, +0.017]，5/5）；F1@IoU0.7 0.418 → 0.459（+0.041 [+0.025, +0.060]，10/0）；F1@IoU0.3 0.729 → 0.691（−0.039）；每图 FP，单目标图 0.30 → 0.54、多目标图 0.55 → 0.57。recall 更高但 FP 也更多（拟合定框没有学习的部分，不会压掉背景上的检测），所以 F1 打平。
+stage 2 plain → 真实 band + fit 的整体指标（`runs_cv/strata_r15_fair/`）：F1@IoU0.5 0.656 → 0.658；F1@IoU0.7 0.418 → 0.459，+0.041 [+0.025, +0.060]（10/0）；F1@IoU0.3 0.729 → 0.691（−0.039）；每图 FP 单目标图 0.30 → 0.54、多目标图 0.55 → 0.57。recall 更高但 FP 也更多（fit 没有学习的部分，压不掉背景上的检测），所以 F1 打平。
 
-**判断**
+加 NMS 之前的第一次 build（`build_r15_nonms.log`）：真实 band 0.622 / 0.683，预测 band 0.531，box-mask 0.492。
+</details>
 
-1. **规则本身是对的：band 完全正确时，按双曲线形状定框比按距离切分高 +0.069（10 个 seed 全胜），检测也用 oracle 模型时 +0.117。** 真实 band + 拟合达到 0.658 / 0.719，后者已经接近第二阶段 oracle 的 0.756，而它没有任何学习的第二阶段。
-2. **这是到目前为止唯一一处"band 形状不可替代"的证据，而且只在成簇目标上。** 和同一个第一阶段上不用 band 的第二阶段相比，真实 band + 拟合的总 F1 打平（0.658 对 0.656），但成簇目标的 recall 是 0.574 对 0.474（+0.100 [+0.068, +0.129]，9/1），严格定位也更好（F1@IoU0.7 +0.041，10/0）；单目标图上它反而略差（recall −0.022，FP 更多）。框回归在成簇目标上几乎没有多检出，沿曲线走能穿过交叉点。
-3. **但用现在预测出来的 band，新规则反而更差（−0.015，成簇目标 −0.061）。** 现有 attention 头在 56×56 上输出，band IoU 只有 0.38，两翼画不全、相邻的 band 糊成一片，曲线走不远（验证 F1 0.567 而测试只有 0.530，选参也不稳）。预测 band 和真实 band 之间差 +0.128，是全项目里最大的一段"可争取"的距离。
-4. 框掩码对照在两种规则下都比 band 低 0.02–0.03（拟合规则下 +0.024 [−0.001, +0.052]），和 Round 13 的 +0.025 同量级，没有变大。
-5. **结论**：要让 band 形状真正起作用，条件已经很具体——把 band 预测好，然后用拟合定框。Round 16 做的就是前一半。
+**结论**
 
-**代码与输出**：`fit_hyperbola.py`（规则）；`infer_bandbox.py prefit`（并行算拟合，缓存 `runs_cv/bandbox_cache/fit/`，不入库）、`build`；新实验 `runs_cv/ds2/hbatbox_aug_{abs_fitbox, abs_gtfitbox, oracle_gtfitbox, boxmask_fitbox, abs_bandbox_nms, abs_gtbandbox_nms, boxmask_bandbox_nms}/`；`runs_cv/bandbox/{chosen.json, sweep.md, prefit_r15.log, build_r15.log, build_r15_nonms.log}`（后者是加 NMS 之前的第一次 build：真实 band 0.622 / 0.683，预测 band 0.531，框掩码 0.492）；`diag_strata.py --out runs_cv/strata_r15`、`runs_cv/strata_r15_fair`（同一个第一阶段上和第二阶段的比较）。
+1. **规则本身是对的**：band 完全正确时，hyperbola fit 比 Voronoi split 高 +0.069（10/10）。
+2. **这是到目前为止唯一一处"band 形状不可替代"的证据，而且只在 grouped targets 上**：和同一个第一阶段上不用 band 的 stage 2 相比，总 F1 打平（0.658 对 0.656），但 grouped recall 0.474 → 0.574（+0.100，9/1），严格定位更好（F1@IoU0.7 +0.041）。框回归分不开交叉的双曲线，沿曲线走可以。
+3. **用现在预测的 band，fit 反而更差**（−0.015，grouped −0.061）：band IoU 只有 0.38，两翼画不全、相邻 band 糊成一片，曲线走不远。预测 band 和真实 band 之间差 +0.128，是全项目最大的"可争取"距离。
+
+输出：`runs_cv/ds2/hbatbox_aug_{abs_fitbox, abs_gtfitbox, oracle_gtfitbox, boxmask_fitbox, ...}/`；`runs_cv/strata_r15/`、`strata_r15_fair/`。
 
 ---
 
-## Round 16：整图上把 band 预测好（全分辨率 attention 头）
+## Round 16：U-shaped decoder，把 band 预测好
 
 **日期**：11-16 凌晨
 
-**为什么**：Round 15 说明拟合定框只差一个条件——band 要预测得好。原来的 attention 头有三个限制：只接在 f3 上（receptive field 约 40 px，一条双曲线宽约 65 px）；在 56×56 上输出，band 只有 2 格厚；监督目标是缩小后再二值化的 mask，细的两翼直接消失。这一轮把这三处都去掉，看 band 能好多少、检测能跟着好多少。
+**为什么做**：Round 15 只差一个条件——band 要预测得好。原 attention head 有三个限制：只接在 f3 上（receptive field 约 40 px）；在 56×56 上输出（band 只有 2 格厚）；监督目标是缩小后二值化的 mask（细的两翼直接消失）。
 
-**做了什么**（`train_basic.py --attn-head unet`，其余设置不变）
+**做了什么**（`train_basic.py --attn-head unet`）：attention head 换成 U-shaped decoder，从 bottleneck 逐级上采样、接 f3 / f2 / f1 skip，**在 224×224 上输出和监督**（原始 mask，不缩小）。fusion 和 paired initialization 不变。band 组和 box-mask 组各 50 个 run，再做 Voronoi 和 fit 两种 refinement。
 
-- attention 头换成 U 形解码：从 bottleneck（28×28，receptive field ≈ 68 px）逐级上采样，接 f3 / f2 / f1 的 skip，**在 224×224 上输出**；监督目标直接用 224×224 的原始 mask，不缩小、不重新二值化。参数 2.05 M → 2.29 M。
-- fusion 通路不变（attention map 平均 pooling 到 28×28 后 concat），paired initialization 不变（共享层的初始化指纹与旧头相同）。
-- 两个实验各 5 折 × 10 seeds：`hbatbox_aug_abs_unet`（band 监督，IWAC1，14 分钟）和 `hbatbox_aug_boxmask_unet`（同一个头、用填实的框监督，IWAC2，11 分钟）。之后各自做 Voronoi 定框和拟合定框，参数网格、选参方式与 Round 12 / 15 相同。
-- 回归检查：改过的 `train_basic.py` 用默认的旧头重跑 `hbatbox_aug_abs` f0 seed0，`preds_val.json`、`preds_test.json` 的 md5 与原 run 相同。
+**结果 1：band 画得怎么样**（`diag_band_quality.py`）
 
-**结果 1：band 画得怎么样**（都放大到 224×224、阈值 0.5 再量，`diag_band_quality.py` → `runs_cv/band_quality/summary.md`）
+| attention head | 测试 band IoU | 训练图 → 测试图 band IoU |
+|---|---|---|
+| 原来的（56×56） | 0.381 ± 0.018 | 0.536 → 0.381 |
+| **U-shaped decoder（224×224）** | **0.421 ± 0.008** | **0.763 → 0.419** |
 
-| attention 头 | band IoU（测试） | precision / recall | 每个目标的 band 覆盖率：全部 / 窄 / 中 / 宽 / 成簇 | band IoU：训练图 → 测试图（10 个 run） |
+**结果 2：检测**（n = 10）
+
+| | 原 head | U-shaped decoder | Δ [95% CI]，胜/负 |
+|---|---|---|---|
+| +attention，fusion only | 0.492 | 0.489 | −0.002，5/5 |
+| + Voronoi refinement | 0.545 | 0.542 | −0.003，6/4 |
+| + hyperbola fit | 0.530 | **0.549** | **+0.019 [+0.002, +0.040]**，7/3；F1@IoU0.7 0.227 → 0.279 |
+| + 真实 band hyperbola fit（上限） | 0.658 | 0.652 | −0.006 |
+| box-mask control，fusion only | 0.502 | 0.477 | −0.025 [−0.058, +0.005]，3/7 |
+| box-mask + Voronoi | 0.519 | 0.522 | — |
+| box-mask + fit | 0.506 | 0.513 | — |
+
+| A → B（都用 U-shaped decoder） | ΔF1 [95% CI] | 胜/平/负 |
+|---|---|---|
+| baseline → band + fit | +0.076 [+0.066, +0.086] | 10/0/0 |
+| **box-mask + fit → band + fit（同一规则）** | **+0.036 [+0.017, +0.054]** | **9/0/1** |
+| box-mask（最好规则）→ band（最好规则） | +0.027 [−0.001, +0.060] | 7/0/3 |
+| box-mask + Voronoi → band + Voronoi | +0.020 [−0.013, +0.052] | 6/0/4 |
+| band + fit → 真实 band + fit | +0.103 [+0.084, +0.122] | 10/0/0 |
+| band + fit → baseline + stage 2 plain（不用 band） | +0.083 [+0.065, +0.100] | 10/0/0 |
+
+<details><summary>band 质量分层、检测分层</summary>
+
+| attention head | band IoU | precision / recall | 每个目标的 band 覆盖率：全部 / narrow / medium / wide / grouped |
 |---|---|---|---|---|
-| 原来的（f3 上一个 3×3 卷积，56×56） | 0.381 ± 0.018 | 0.645 / 0.488 | 0.447 / 0.365 / 0.470 / 0.503 / 0.436 | 0.536 → 0.381 |
-| **U 形解码，224×224** | **0.421 ± 0.008** | 0.676 / 0.528 | 0.489 / 0.391 / 0.548 / 0.526 / 0.464 | **0.763 → 0.419** |
+| 原来的 | 0.381 ± 0.018 | 0.645 / 0.488 | 0.447 / 0.365 / 0.470 / 0.503 / 0.436 |
+| U-shaped decoder | 0.421 ± 0.008 | 0.676 / 0.528 | 0.489 / 0.391 / 0.548 / 0.526 / 0.464 |
 
-**结果 2：检测**（5 折合并，n = 10 seeds，HBAT box）
+检测分层（`runs_cv/strata_r16/summary.md`）：grouped recall，band + fit 0.430（原 head 0.412；Voronoi 0.473；stage 2 plain 0.453；真实 band + fit 0.574）。同一规则下 band 相对 box-mask 的优势集中在 grouped（+0.078 [+0.046, +0.108]）、narrow（+0.092）和多目标图（+0.091），在 wide（−0.072）和单目标图（−0.082）上反而输。
 
-| | 原来的头 | U 形解码头 | Δ [95% CI]，胜/负 |
-|---|---|---|---|
-| +attention，只做 fusion | 0.492 ± 0.031 | 0.489 | −0.002 [−0.025, +0.021]，5/5 |
-| + Voronoi 定框（Round 12 的规则） | 0.545 ± 0.025 | 0.542 | −0.003 [−0.021, +0.014]，6/4 |
-| + 拟合定框（Round 15 的规则） | 0.530 ± 0.039 | **0.549** | **+0.019 [+0.002, +0.040]**，7/3；F1@IoU0.7 0.227 → 0.279 |
-| + 真实 band 拟合定框（上限） | 0.658 | 0.652 | −0.006 [−0.025, +0.011] |
-| box-mask 对照，只做 fusion | 0.502 | 0.477 | −0.025 [−0.058, +0.005]，3/7 |
-| box-mask 对照 + Voronoi 定框 | 0.519 | 0.522 | — |
-| box-mask 对照 + 拟合定框 | 0.506 | 0.513 | — |
+回归检查：改过的 `train_basic.py` 用默认旧 head 重跑 f0 seed0，预测文件 md5 与原 run 相同。
+</details>
 
-| A → B（都用 U 形解码头） | ΔF1 [95% CI] | Wilcoxon p | 胜/平/负 |
-|---|---|---|---|
-| baseline → band + 拟合定框 | +0.076 [+0.066, +0.086] | 0.002 | 10/0/0 |
-| Round 12 方法（旧头 + Voronoi）→ band + 拟合定框 | +0.004 [−0.005, +0.014] | — | 6/0/4 |
-| **box-mask + 拟合 → band + 拟合（同一规则）** | **+0.036 [+0.017, +0.054]** | 0.010 | **9/0/1** |
-| box-mask + Voronoi → band + 拟合（两边各取验证集上最好的规则） | +0.027 [−0.001, +0.060] | 0.160 | 7/0/3 |
-| box-mask + Voronoi → band + Voronoi | +0.020 [−0.013, +0.052] | 0.232 | 6/0/4 |
-| band + 拟合 → 真实 band + 拟合 | +0.103 [+0.084, +0.122] | 0.002 | 10/0/0 |
-| band + 拟合 → baseline + 第二阶段 plain（Round 14，不用 band） | +0.083 [+0.065, +0.100] | 0.002 | 10/0/0 |
+**结论**
 
-分层（`runs_cv/strata_r16/summary.md`）：成簇目标的 recall，band + 拟合是 0.430（旧头 0.412；Voronoi 0.473；第二阶段 plain 0.453；真实 band + 拟合 0.574）。同一规则下 band 相对框掩码的优势集中在成簇目标（+0.078 [+0.046, +0.108]）、窄目标（+0.092）和多目标图（+0.091），在宽目标（−0.072）和单目标图（−0.082）上反而输。
+1. **限制 band 质量的是数据量，不是结构。** 训练图 band IoU 0.54 → 0.76，测试图只 0.38 → 0.42。和 Round 9（数据减少 IoU 0.38 → 0.33）、Round 14（按目标归一化也只有 0.48）是同一个结论：三种完全不同的设计，测试 band IoU 都停在 0.38–0.48。
+2. **检测没有实质变化**：fit 因 band 好了一点 +0.019，追平 Round 12（0.549 对 0.545）；仍比不用 band 的 stage 2 低 0.083。
+3. band 相对 box-mask 的优势还是 0.02–0.04，出现在符合机制的地方（grouped、narrow），但在 wide、单目标图上丢分，总量没变大。
 
-**判断**
+**阶段 D 的总结**：按目标做 attention（R14）、按形状分开 grouped targets（R15）、把 band 预测好（R16）三次尝试，都没能让**预测的** band 超过不用 band 的做法。band 形状有不可替代价值的证据只有一条，并且前提是 band 准确：真实 band + hyperbola fit 在 grouped targets 上 recall 比框回归高 0.10，总 F1 打平。要满足这个前提，需要的是**更多带 band 标注的数据**，而不是再改网络。
 
-1. **"band 在网络里丢了"这个问题在训练图上解决了，但没有带到测试图上。** 训练图的 band IoU 从 0.54 到 0.76，说明新头有能力把 band 画出来；测试图只从 0.38 到 0.42。现在限制 band 质量的是泛化，也就是数据量（每折 91 张训练图、约 150 个目标），不再是分辨率或 receptive field。这和 Round 9（训练图减到 50% / 25% 时 band IoU 0.38 → 0.35 → 0.33）、Round 14（按目标归一化之后也只有 0.48）是同一个结论：三种完全不同的设计，预测的 band 都停在 0.38–0.48。
-2. **检测没有实质变化。** fusion 和 Voronoi 定框都不动；拟合定框因为 band 好了一点而 +0.019，刚好追平 Round 12 的方法（0.549 对 0.545），严格 IoU 下略好（F1@IoU0.7 +0.037）。离真实 band 仍差 0.10，比不用 band 的第二阶段低 0.083。
-3. **band 相对框掩码的优势还是 0.02–0.04。** 同一规则下是 +0.036（CI 不含 0，9 胜 1 负），但框掩码在验证集上更适合 Voronoi 规则，两边各取最好的规则时是 +0.027 [−0.001, +0.060]，和 Round 13 的 +0.025 没有区别。优势出现的位置符合机制（成簇、窄目标，沿曲线走能分开），但同时在宽目标、单目标图上丢分，总量没有变大。
-4. **Round 14–16 的总结论**：三次尝试（按目标做 attention、按形状定框、把 band 预测好）都没能让"预测出来的 band"在这个数据集上超过不用 band 的做法。band 形状有不可替代价值的证据只有一条，而且以 band 准确为前提：真实 band + 拟合定框在成簇目标上的 recall 比框回归高 0.10（0.474 → 0.574，Round 15），总 F1 与框回归打平。把这个前提变成现实需要的是**更多带 band 标注的数据**，而不是再改网络。
-
-**代码与输出**：`train_basic.py`（`--attn-head unet`、`AttnDecoder`、`configure_attn_stride`）；`run_seeds.py` 的 `EXPS` 新增 `hbatbox_aug_abs_unet`、`hbatbox_aug_boxmask_unet`；`infer_bandbox.py` 新增 5 个 `*_unet_*` 变体；`diag_band_quality.py` → `runs_cv/band_quality/{summary.md, summary.json, train_vs_test.json}`；`diag_strata.py --out runs_cv/strata_r16`；日志 `runs_cv/launch_iwac1_r16.log`、`launch_iwac2_r16.log`、`infer_r16_iwac2.log`、`runs_cv/bandbox/{infer_r16.log, prefit_r16.log, prefit_r16_boxmask.log, build_r16_abs.log, build_r16_boxmask.log}`。`hbatbox_aug_abs_unet` 的权重在 IWAC1，`hbatbox_aug_boxmask_unet` 的权重在 IWAC2 的 `~/s2_mirror_r14/`。
+输出：`runs_cv/ds2/hbatbox_aug_{abs_unet, boxmask_unet}*`；`runs_cv/band_quality/`；`runs_cv/strata_r16/`。
 
 ---
 
-## 在新机器上继续
-
-**2026-11-15 状态**：本机停跑，换到新 GPU 机器。仓库历史已重置为单个提交并推到 GitHub（旧的 12 GB 历史删除）。每个 run 的轻量结果（`preds_*.json`、`metrics*.json`、`run_info.json`、`train_log.csv`、控制台日志）已入库；权重 `*.pth`、可视化图和 `*.npz` 没有入库。
-
-```bash
-git clone https://github.com/youryugi/shuangquxian.git
-cd shuangquxian
-pip install -r requirements.txt        # torch 按新机器的 CUDA 版本装，见文件内注释
-
-# 1. 重建 prepare_data.py 的数据目录（datasets/ 不入库，约 1 分钟）
-cd experiments/revision/detector_comparison
-for f in 0 1 2 3 4; do
-  python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source hbat
-  python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source official
-done
-
-# 2. 续跑。run_seeds.py 会跳过已有 metrics.json 的 run
-cd ../basic_ds2
-python run_seeds.py --exps hbatbox_aug_oracle --jobs 8                              # Round 7 补齐 14 个 run
-python run_seeds.py --exps hbatbox_aug_abs_extent hbatbox_aug_oracle_extent hbatbox_aug_none_s4 hbatbox_aug_abs_s4 --jobs 8   # Round 8
-python run_seeds.py --exps hbatbox_aug_none_frac50 hbatbox_aug_abs_frac50 hbatbox_aug_none_frac25 hbatbox_aug_abs_frac25 --jobs 8   # Round 9
-python run_seeds.py --exps hbatbox_aug_abs_lam0.1 hbatbox_aug_abs_lam0.3 hbatbox_aug_abs_lam1.5 hbatbox_aug_abs_gate --jobs 8        # Round 10
-
-# 3. 汇总（含所有配对）
-python aggregate_cv.py
-```
-
-两点注意：
-- **换 GPU 后结果不再和本机逐位一致**（kernel 不同），但 paired initialization 由 CPU 的 seed 决定，跨机器相同，配对比较仍然成立。更干净的做法是把 Round 4 的两个主 arm（`hbatbox_aug_none`、`hbatbox_aug_abs`）在新机器上也重跑一遍：先把 `runs_cv/ds2/hbatbox_aug_none` 和 `hbatbox_aug_abs` 改名备份，再跑，这样所有配对都在同一张卡上。5090 上 100 个 run 约 20–30 分钟。
-- `--jobs` 在 5090 上可开 8–12，`--workers 1`；本机 5060 Ti 是 `--jobs 4 --workers 2`。
-- Round 6 的 `refine_with_band.py infer` 需要 `final.pth`，新机器上要先重跑 `hbatbox_aug_abs` 才有权重；`refine` 阶段只读 npz，也要重新 infer。
-
-### 2026-11-15 实际执行记录（IWAC1 + IWAC2）
-
-两台 Linux 机器各一块 RTX 5090（32 GB），conda 环境 `gpr`（Python 3.10，torch 2.11.0+cu128，requirements.txt）。仓库都在 `~/github/shuangquxian`，数据目录按上面第 1 步重建。
-
-- **采用"更干净的做法"**：Round 4 的 `hbatbox_aug_none`、`hbatbox_aug_abs` 和 Round 7 已跑的 36 个 `hbatbox_aug_oracle` 都在 5090 上**从头重跑**，Windows / 5060 Ti 上的旧结果改名为 `runs_cv/ds2/*_win5060ti/`（控制台日志移到 `runs_cv/logs_win5060ti/`）保留。`aggregate_cv.py` 多了三对：旧 none→abs（即 Round 4 原表）、旧 none→新 none、旧 abs→新 abs，后两对量化换卡本身带来的差别。`aug_none` / `aug_abs`（official box 对照）没有重跑，仍是旧机器结果。
-- **两台 5090 的结果逐位一致**：同一配置（`hbatbox_aug_none` f0 seed0）在 IWAC1 和 IWAC2 上各跑一次，`train_log.csv`、`preds_val.json`、`preds_test.json` 的 md5 完全相同，`metrics.json` 只差路径和耗时字段。因此配对的两臂可以分在不同机器上。
-- **分工**：IWAC1 跑 none / abs / oracle、abs_extent / oracle_extent、lam0.1 / 0.3 / 1.5；IWAC2 跑 none_s4 / abs_s4、四个 frac、gate。IWAC2 的结果用 rsync 同步回 IWAC1 后统一 aggregate、提交。
-- **吞吐**：`--jobs 10 --workers 1` 时单个 run 约 75 s（stride 8）、约 160 s（stride 4）、frac50 约 50 s。GPU 利用率 100% 但功耗只有约 325 W / 575 W：模型太小，kernel 很短，多进程只能分时。实测 10 → 16 个进程时单 run 等比变慢、总吞吐不变（0.133 → 0.136 run/s），所以不开 CUDA MPS 的话 10 个进程就是上限。
-
 ## 下一步
 
-（2026-11-16 Round 14–16 之后重排。前三项需要用户决定方向，后面的是可以直接做的。）
+（2026-11-16 Round 16 之后。前三项需要你决定方向，后面的可以直接做。）
 
 | 优先级 | 做什么 | 为了回答什么 | 成本 |
 |---|---|---|---|
-| **1** | **数据集 1 用严格协议重跑**（等 band 标注补齐，见"Round 7–10 之前"）：baseline / +attention / band 定框（Voronoi、拟合）/ box-mask 对照，**外加 baseline + 第二阶段 plain、band** | 论文主张能不能保住。数据集 1 有 170 张原图（每折训练约 124 张，是数据集 2 的 1.4 倍；原图 640 px、目标更大），可以看 Round 16 的结论"band 质量受数据量限制"在另一份数据上是否成立：band IoU 是否更高、拟合定框是否开始超过 Voronoi 和第二阶段。数据量只多四成，不要指望它单独解决 band 的泛化 | 训练 100–200 个 run；`stage2_instance.py`、`infer_bandbox.py`、`diag_band_quality.py` 里写死的 `ds2` 路径要先参数化 |
-| **2** | **决定论文怎么面对"第二阶段框回归"**（Round 14） | 不用 band 的第二阶段是 +0.159，Round 12 的 band 定框是 +0.072。要么把第二阶段写进 baseline 再谈 band 的增量（目前为 0），要么保留单阶段的叙述、并在讨论里如实说明 band 定框解决的问题也可以由框回归阶段解决 | 只需写作，但决定论文的主张 |
-| **3** | **给 band 更多数据**：a) 数据集 1（见 1，只多四成）；b) 两个数据集合并训练 attention 头；c) 用合成双曲线（HBAT 的参数模型随机采样，叠加到无目标的背景上）预训练 attention 头，再在真实数据上微调 | Round 16：band IoU 训练图 0.76、测试图 0.42；Round 15：band 准确时拟合定框在成簇目标上的 recall 比框回归高 0.10（总 F1 打平）。这是目前唯一有证据支持的、能让 band 形状起作用的路径；能否把测试 band IoU 提到够用的水平（真实 band 是上限）没有保证 | c) 需要写合成数据生成 + 每组 100 个 run |
-| 4 | 把拟合定框接在第二阶段之后（第二阶段的框作种子，再沿 band 拟合），只在成簇目标上启用或全局启用，验证集选 | 第二阶段修好了孤立目标（recall 0.74），成簇目标没动（0.45）；拟合定框正好相反地擅长成簇目标。两者是否相加，取决于 band 质量（见 3） | 只需推理 |
-| 5 | 需要形状才能回答的输出：拟合定框已经给出每个目标的顶点 (x_v, y_v) 和 slope（对应波速），和 HBAT 标注比误差；对照 = 从框反推（顶点取框上边中点） | 框掩码和框回归给不出曲线参数；这是 band 在"检测 F1"之外的用途。预期：对称完整的双曲线上框也能反推出顶点，差别应出现在单翼、被截断的目标上 | 只需评估代码（`fit_hyperbola.py` 的输出里已有 xv / yv / slope） |
-| 6 | 决定两次硬件复现怎么写进论文 | fusion 的效应量（+0.004 / +0.019）和换卡噪声（+0.013）同量级 | 只需写作 |
-| 7 | 后处理自由度对等的对照：baseline 框**宽高分开**放大（kx, ky 在验证集上选）、或按预测宽度分段放大 | band 特有的效应 +0.025–0.036，要确认不是对照搜索自由度不够造成的。Round 14 之后这一项的重要性下降（第二阶段是更强的对照） | 只需推理 |
-| 8 | 调好的检测器上还剩多少：`detector_comparison` 的 YOLOv8（HBAT box）在 5090 上跑起来，再接 band 辅助头 + 定框 | Round 14 已经说明 baseline 的框回归很弱；在强检测器上 band 的增量才是论文能站住的数 | 100+ run，另有 ultralytics 环境 |
+| **1** | **决定论文怎么面对 stage 2**（Round 14） | 不用 band 的 stage 2 是 +0.159，Round 12 的 box refinement 是 +0.072，revision_map S5 现在的定位（"box refinement 进主表"）是 Round 14 之前定的。两个选项：(a) 把 stage 2 写进 baseline 再谈 band 的增量（目前为 0）；(b) 保留单阶段叙述，在 Discussion 里如实说明 box refinement 解决的问题也可以由框回归阶段解决 | 只需写作，但决定论文主张 |
+| **2** | **数据集 1 用严格协议重跑**（等 band 标注补齐）：baseline / +attention / box refinement（Voronoi、fit）/ box-mask control，外加 baseline + stage 2 plain、band | 论文主张能不能保住；"band 质量受数据量限制"在另一份数据上是否成立。数据集 1 有 170 张原图（每折训练约 124 张，只多四成），不要指望它单独解决 band 泛化 | 100–200 个 run；`stage2_instance.py`、`infer_bandbox.py`、`diag_band_quality.py` 里写死的 `ds2` 路径要先参数化 |
+| **3** | **给 band 更多数据**：a) 数据集 1；b) 两个数据集合并训练 attention head；c) 用合成双曲线（HBAT 参数模型随机采样、叠到无目标背景上）预训练 attention head 再微调 | 目前唯一有证据支持、能让 band 形状起作用的路径（Round 15、16）；能否提到够用的水平没有保证 | c) 要写合成数据生成 + 每组 100 run |
+| 4 | hyperbola fit 接在 stage 2 之后（stage 2 的框作种子），只对 grouped targets 或全局启用 | stage 2 修好了孤立目标、grouped 没动；fit 正好擅长 grouped。是否相加取决于 band 质量 | 只需推理 |
+| 5 | 形状输出的价值：hyperbola fit 已给出每个目标的顶点和 slope（对应波速），和 HBAT 标注比误差；对照 = 从框反推 | band 在"检测 F1"之外的用途；预期差别出现在单翼、被截断的目标上 | 只需评估代码 |
+| 6 | 两次硬件复现怎么写进论文 | fusion 效应（+0.004 / +0.019）和换卡噪声（+0.013）同量级 | 只需写作 |
+| 7 | scale control 改成宽高分开放大（kx, ky） | 确认 band 特有效应不是对照搜索自由度不够造成的；Round 14 之后重要性下降 | 只需推理 |
+| 8 | 强检测器上还剩多少：YOLOv8（HBAT box）+ band 辅助头 + refinement | 在强检测器上 band 的增量才是论文能站住的数 | 100+ run |
 
-已完成并划掉的旧条目：~~把 band → 框尺寸做进推理~~（Round 12）；~~让 band 在窄目标、成簇目标上预测得更准、换掉 Voronoi 切分~~（Round 15、16：规则换了，真实 band 下有效；band 预测受数据量限制）；~~λ 扫描、gate、oracle 上限~~（Round 7–10）。
+已完成：~~box refinement 做进推理~~（R12）；~~换掉 Voronoi split、窄 / grouped 目标的 band 预测~~（R15、16）；~~λ、gate、oracle 上限~~（R7–10）。
 
-**写作**：数据集 2 上严格协议的结果是 ΔF1 = +0.019 [+0.004, +0.035]（5090）/ +0.004 [−0.021, +0.028]（5060 Ti）。论文主张应从"提升 F1 0.06"改为"attention 可解释、不降低精度、提升在 0.02 量级且对硬件敏感"，主表如实报告两次复现；并给出 oracle 上限（+0.032 / +0.043）说明现有 fusion 通路能从 band 里拿到的信息有限，而 Round 6 的 post-processing 说明 band 本身的信息价值（+0.11）。数据描述里要写清楚：official box 是 scene-level、HBAT box 是 instance-level，以及两者的匹配率；test set 27 张图中有 12 张存在一个框包含多条双曲线的情况。
+**写作要点**（供第 1 项决定时参考）
 
-**Round 14–16 之后对写作的补充**：(1) "band 定框把框画对了"仍然是事实（+0.072，10/10），但不能再写成"只有 band 能提供框的尺寸"：只用框标注的第二阶段做得更好（+0.159），审稿人很容易想到这个对照。(2) 能如实写的 band 形状的独特价值只有一条，并且要写清前提：band 准确时，按双曲线拟合定框在成簇目标上的 recall 比同一第一阶段上的框回归高 0.10（0.474 → 0.574），总 F1 打平（0.658 对 0.656）；用预测的 band 时这个优势没有实现，原因是 band 的泛化（训练图 IoU 0.76、测试图 0.42）。(3) 第一阶段的 attention 监督在接了第二阶段之后仍有 +0.024–0.030 的检出增益（9 胜 1 负），但 band 和框掩码监督没有区别，只能写成"稠密辅助监督有益"。
+- fusion：严格协议 ΔF1 = +0.019 [+0.004, +0.035]（5090）/ +0.004 [−0.021, +0.028]（5060 Ti），如实报告两次。主张从"提升 F1 0.06"改为"attention 可解释、不降低精度、提升在 0.02 量级且对硬件敏感"。fusion 通路上限 +0.032 / +0.043（真实 band）。
+- box refinement："把框画对了"仍是事实（+0.072，10/10），但不能写成"只有 band 能提供框的尺寸"：只用框标注的 stage 2 做得更好（+0.159）。band 形状特有 +0.025（box-mask control）。
+- band 形状的独特价值只能写一条，并写清前提：band 准确时，hyperbola fit 在 grouped targets 上的 recall 比同一第一阶段上的框回归高 0.10（0.474 → 0.574），总 F1 打平；用预测 band 时没有实现，原因是 band 泛化（训练 0.76、测试 0.42）。
+- 第一阶段 attention 接了 stage 2 之后仍有 +0.024–0.030（9/1），但 band 和 box-mask 没区别，只能写成"dense 辅助监督有益"。
+- 数据描述：official box 是 scene-level、HBAT box 是 instance-level 及两者匹配率；27 张测试图中 12 张一框多条。
 
 ---
 
@@ -944,16 +995,17 @@ Round 4 起所有正式数字都按这套设置。
 
 | 项 | 设置 |
 |---|---|
-| 数据 | 数据集 2 共 131 张原图（224×224），全部使用；按来源分组做 5-fold CV |
+| 数据 | 数据集 2 共 131 张原图（224×224），全部使用；按来源分组 5-fold CV |
 | 检测目标 | HBAT box（主）；official box（对照） |
-| attention 监督目标 | HBAT 导出的 band mask PNG，224→56 用面积插值缩小，再以 0.5 二值化 |
-| 网络 | 三层 backbone（base_ch=32）+ CenterNet heatmap head；attention head 接在 f3（56×56）上，pooling 到 28×28 后用 concat 做 fusion |
-| 训练 | Adam，lr 5e-4，batch size 8，120 epochs，bf16，水平翻转增强，用最后一个 epoch 的权重；attention loss = BCE + Dice，权重 λ = 0.7 |
-| 初始化 | paired initialization：检测部分两个 arm 逐参数相同；attention 分支用单独 seed；数据顺序固定 |
-| 评估 | 5 个 fold 的 validation 预测合并选 score threshold → 5 个 fold 的 test 预测合并算 F1、AP50（IoU 0.5，greedy matching） |
-| 统计 | 按 seed 配对，n = 10：Δ 的均值、bootstrap 95% CI、Wilcoxon signed-rank p、正/零/负个数 |
+| attention 监督目标 | HBAT 导出的 band mask PNG，224 → 56 面积插值后 0.5 二值化（Round 16 的 U-shaped decoder 直接用 224） |
+| 网络 | 三层 backbone（base_ch = 32）+ CenterNet heatmap head；attention head 接 f3（56×56），pooling 到 28×28 后 concat fusion |
+| 训练 | Adam，lr 5e-4，batch 8，120 epochs，bf16，水平翻转，用最后一个 epoch 的权重；attention loss = BCE + Dice，λ = 0.7 |
+| 初始化 | paired initialization：检测部分两个 arm 逐参数相同；attention 分支单独 seed；数据顺序固定 |
+| 评估 | 5 个 fold 的 validation 预测合并选 threshold → 5 个 fold 的 test 预测合并算 F1、AP50（IoU 0.5，greedy matching） |
+| 统计 | 按 seed 配对，n = 10：Δ 均值、bootstrap 95% CI、Wilcoxon signed-rank p、胜/平/负 |
+| 推理步骤的参数 | box refinement、stage 2、hyperbola fit 的参数都在 10 seeds 的合并 validation F1 均值上全局选一组，测试集不参与 |
 
-**和论文原脚本的差别**：图像（247 张增强图 → 131 张原图）、数据切分（随机 50/50 → 按来源分组 5-fold）、检测框（自己标的框 → HBAT box）、mask（自己画的抛物线 → HBAT 双曲线 band）、初始化（未对齐 → paired initialization）、评估（固定 threshold 0.375 → 在 validation set 上选 threshold）。网络结构、loss、超参数没改。原脚本：[centernet_band_attention.py](../../submission/additional_centernet/centernet_band_attention.py)。
+**和论文原脚本的差别**：图像（247 张增强图 → 131 张原图）、切分（随机 50/50 → 按来源分组 5-fold）、检测框（自标 → HBAT box）、mask（自画抛物线 → HBAT 双曲线 band）、初始化（未对齐 → paired）、评估（固定 threshold 0.375 → validation 选 threshold）。网络、loss、超参没改。原脚本：[centernet_band_attention.py](../../submission/additional_centernet/centernet_band_attention.py)。
 
 ## 附录 B：文件与数据位置
 
@@ -961,55 +1013,79 @@ Round 4 起所有正式数字都按这套设置。
 
 | 文件 | 用途 | Round |
 |---|---|---|
-| `train_basic.py` | 训练 + 导出预测 + 评估。`--mode none` 为 baseline，`--mode abs` 为 +attention，`--mode oracle` 为真实 band fusion；`--fuse concat/gate/extent`；`--det-stride 4/8`；`--train-frac`；`--attn-head conv/unet`（unet = U 形解码到 224×224，Round 16） | 2–4, 7–10, 16 |
-| `run_seeds.py` | 并行跑 5 folds × 10 seeds，已完成的自动跳过；Round 7–10、13、16 的实验名都登记在 `EXPS` 里 | 4, 7–10, 13, 16 |
-| `aggregate_cv.py` | 合并 5 个 fold + paired 统计 → `runs_cv/cv_summary.md` | 4 |
+| `train_basic.py` | 训练 + 导出预测 + 评估。`--mode none/abs/oracle`；`--fuse concat/gate/extent`；`--det-stride 4/8`；`--train-frac`；`--attn-head conv/unet`；`--mask-dir masks_band/masks_box` | 2–4, 7–10, 13, 16 |
+| `run_seeds.py` | 并行跑 5 folds × 10 seeds，已完成的跳过；实验名登记在 `EXPS` | 4, 7–10, 13, 16 |
+| `aggregate_cv.py` | 合并 5 个 fold + paired 统计 → `runs_cv/cv_summary.md` | 4 起 |
 | `check_data.py` | 核对数据目录和 mask | 2 |
-| `diag_resolution.py` / `diag_misses.py` / `diag_box_size.py` | 诊断脚本，只读预测结果 | 5 |
-| `refine_with_band.py` / `vis_refine.py` | 用 band 修正框 + 可视化 | 6 |
-| `diag_strata.py` | 分层 recall + 定位质量分析，只读 `runs_cv` 的预测 → `runs_cv/strata/`（Round 11）、`runs_cv/strata_r12/`（Round 12）、`runs_cv/strata_r13/`（Round 13）、`runs_cv/strata_r14/`、`strata_r15/`、`strata_r16/` | 11–16 |
-| `infer_bandbox.py` | band → 框尺寸的推理步骤：`infer` 用已有 `final.pth` 重推理并缓存注意力图；`build` 在合并验证集上全局选参，生成 `*_bandbox` / `*_gtbandbox` / `*_scale` 六个新实验的 run 目录（`runs_cv/bandbox/chosen.json`、`sweep.md`，按变体合并）；`infer --exps` 只做指定实验、已有缓存跳过；`prefit` 并行预计算拟合定框（Round 15）；`*_fitbox`、`*_bandbox_nms`、`*_unet_*` 变体（Round 15、16） | 12, 13, 15, 16 |
-| `vis_errors.py` | 逐图画出预测 vs 真值：命中 GT（绿）/ 漏检 GT（橙，FN）/ 命中预测（蓝）/ 误检预测（红，FP），可叠加预测 band；多个 exp 并排。协议同 `aggregate_cv.py`（合并验证集阈值、IoU 0.5 贪心匹配）→ `runs_cv/vis_errors/seed<k>/{<stem>.png, index.md, errors.csv}`（png 不入库） | 诊断 |
-| `stage2_instance.py` | 第二阶段（按每条双曲线）：`train` 每个 (fold, seed) 依次训 plain / unsup / boxmask / band / oracle 五个 arm 并修正第一阶段的候选框（原始输出 `runs_cv/s2_cache/`，不入库）；`build` 验证集全局选参（迭代次数 × NMS × mask 阈值）并生成 `<src>_s2*`、`<src>_nms` 实验目录（`runs_cv/s2/chosen.json`、`sweep.md`）；`diag` 窗口级诊断（`runs_cv/s2/diag.md`）；`--src` 换第一阶段 | 14 |
-| `fit_hyperbola.py` | 双曲线拟合定框的规则：`fit_seed`（顶点 + slope 搜索，按"贴着 band 中心线走多远"打分）、`fit_image`、`apply_fits` | 15 |
-| `diag_band_quality.py` | 预测 band 的质量（224×224 上的 IoU / precision / recall，每个目标的 band 覆盖率按宽度、是否成簇分层），读 `runs_cv/bandbox_cache/` → `runs_cv/band_quality/` | 16 |
+| `diag_resolution.py` / `diag_misses.py` / `diag_box_size.py` | 诊断，只读预测 | 5 |
+| `refine_with_band.py` / `vis_refine.py` | box refinement 首版 + 可视化 | 6 |
+| `diag_strata.py` | 分层 recall + 定位质量 → `runs_cv/strata*/` | 11–16 |
+| `infer_bandbox.py` | box refinement 正式版：`infer` 重推理缓存 attention map；`prefit` 预计算 hyperbola fit；`build` 全局选参、生成 `*_bandbox` / `*_gtbandbox` / `*_scale` / `*_fitbox` / `*_unet_*` 实验目录 | 12, 13, 15, 16 |
+| `stage2_instance.py` | stage 2：`train`（五个 arm）/ `build`（选参、生成 `*_s2*` 目录）/ `diag`（窗口级诊断）；`--src` 换第一阶段 | 14 |
+| `fit_hyperbola.py` | hyperbola fit 规则 | 15 |
+| `diag_band_quality.py` | 预测 band 质量（IoU、按宽度 / grouped 分层覆盖率）→ `runs_cv/band_quality/` | 16 |
+| `vis_errors.py` | 逐图画 TP / FP / FN，可叠加预测 band → `runs_cv/vis_errors/` | 诊断 |
+| `vis_band_resolution.py` | band 缩到 56 / 28 后保留多少（统计）；原 head vs U-shaped decoder 的预测并排图 + 翼尖放大 → `runs_cv/band_resolution/`。画图要两个 `final.pth`（`--conv-run` / `--unet-run`） | 5、16 补充 |
 
 **结果**
 
 | 位置 | 内容 | 能否引用 |
 |---|---|---|
-| `runs_cv/ds2/<exp>/f<fold>_seed<k>/` | Round 4（5090 重跑）、Round 7–10、13 的 16 个训练实验 × 50 个 run，加 Round 12、13 由推理生成的 6 个实验：`preds_*.json`、`metrics*.json`、`run_info.json`、`train_log.csv`（入库）；`final.pth`、`vis/` 只在跑它的那台机器上（IWAC1：none / abs / oracle / extent / lam0.1 / lam0.3 / boxmask；IWAC2：s4 / frac / gate / lam1.5） | ✅ 正式 |
-| `runs_cv/ds2/*_win5060ti/` | Round 4 的 `hbatbox_aug_none` / `hbatbox_aug_abs` 和 Round 7 前 36 个 oracle run 在 Windows / 5060 Ti 上的原始结果；`aug_none` / `aug_abs` 没有重跑，仍是 5060 Ti 结果 | ✅ 作硬件复现对照 |
-| `runs_cv/cv_summary.md/.json` | Round 4、7–13 全部配对的汇总（含换卡前后三对） | ✅ 正式 |
-| `runs_cv/log_*.txt`、`launch_iwac*_q*.log`、`run_seeds.log`、`logs_win5060ti/` | 每个 run 的控制台日志和调度日志（IWAC2 的部分已同步过来） | — |
-| `runs_cv/ds2/hbatbox_aug_none_{nms,s2plain,s2unsup,s2boxmask,s2band,s2oracle,s2boxmask_mb,s2band_mb}/`、`hbatbox_aug_abs_{s2plain,s2band}/`、`hbatbox_aug_boxmask_s2plain/` | Round 14：第二阶段修正后的预测（由 `stage2_instance.py build` 生成；第二阶段的权重不保存，原始输出在 `runs_cv/s2_cache/`，不入库，可用同一命令重算，两台机器逐位一致） | ✅ 正式 |
-| `runs_cv/ds2/hbatbox_aug_{abs_fitbox, abs_gtfitbox, oracle_gtfitbox, boxmask_fitbox, abs_bandbox_nms, abs_gtbandbox_nms, boxmask_bandbox_nms}/` | Round 15：拟合定框及其对照（由 `infer_bandbox.py build` 生成） | ✅ 正式 |
-| `runs_cv/ds2/hbatbox_aug_{abs_unet, boxmask_unet}/` 及其 `_bandbox` / `_fitbox` / `_gtfitbox` | Round 16：U 形解码 attention 头的训练结果和定框结果；`final.pth` 分别在 IWAC1（abs_unet）和 IWAC2 的 `~/s2_mirror_r14/`（boxmask_unet） | ✅ 正式 |
-| `runs_cv/s2/`、`runs_cv/bandbox/`、`runs_cv/band_quality/`、`runs_cv/strata_r14–16/` | Round 14–16 的选参记录（`chosen.json`、`sweep.md`）、窗口级诊断、band 质量、分层分析、各步日志 | ✅ |
-| `runs_cv/refine/` | Round 6：attention map（npz）、修正后的预测、`summary.md`、`vis/` | ✅（仅作 post-processing 证据） |
+| `runs_cv/ds2/<exp>/f<fold>_seed<k>/` | 所有训练和推理生成的实验，每个 run：`preds_*.json`、`metrics*.json`、`run_info.json`、`train_log.csv`（入库）；`final.pth`、`vis/` 只在跑它的机器上 | ✅ 正式 |
+| `runs_cv/ds2/*_win5060ti/` | Round 4 两个主 arm 和 Round 7 前 36 个 oracle run 的 5060 Ti 原始结果；`aug_none` / `aug_abs`（official box）只有这一版 | ✅ 硬件复现对照 |
+| `runs_cv/cv_summary.md/.json` | 全部配对汇总 | ✅ 正式 |
+| `runs_cv/bandbox/`、`s2/`、`band_quality/`、`band_resolution/`、`strata*/` | 选参记录（`chosen.json`、`sweep.md`）、窗口级诊断、band 质量、分层分析、日志 | ✅ |
+| `runs_cv/refine/` | Round 6 首版 box refinement | ✅（被 Round 12 取代） |
+| `runs_cv/bandbox_cache/`、`s2_cache/` | 中间缓存 | 不入库，可重算 |
 | `runs/` | Round 2、3（single fold、初始化未对齐） | ❌ 只作对照 |
 | `runs_legacy_init_1114/` | Round 1 | ❌ 作废 |
-| `runs_smoke/` | smoke test（只验证代码能跑通） | ❌ |
+| `runs_smoke/` | smoke test | ❌ |
 
-**数据**（`../detector_comparison/datasets/`）：`ds2_f<0-4>_s100_hbatbox/`（HBAT box，主）、`ds2_f<0-4>_s100/`（official box）。每个目录里两套框的 JSON 都有，可以交叉评估。标注的唯一来源是 `data/additional_utilities/hbat/annotations.json`。
+**权重在哪台机器**：IWAC1：none / abs / oracle / extent / lam0.1 / lam0.3 / boxmask / abs_unet；IWAC2：s4 / frac / gate / lam1.5；boxmask_unet 在 IWAC2 的 `~/s2_mirror_r14/`。stage 2 的权重不保存，可用同一命令重算（两台机器逐位一致）。
 
-**细节备查**：训练图 246 里唯一的目标没有双曲线参数（unparam），它的 mask 全黑，但仍参与训练；全部 6 个 unparam 目标在 HBAT box 模式下改用 official box。
+**数据**（`../detector_comparison/datasets/`）：`ds2_f<0-4>_s100_hbatbox/`（HBAT box，主）、`ds2_f<0-4>_s100/`（official box）。每个目录两套框的 JSON 都有。标注唯一来源 `data/additional_utilities/hbat/annotations.json`。训练图 246 的唯一目标没有双曲线参数（unparam），mask 全黑；全部 6 个 unparam 目标在 HBAT box 模式下改用 official box。
 
 ## 附录 C：潜在问题清单
 
-1. 数据集 1 还没用严格协议跑过（最大的空白）。Round 14–16 的结论（第二阶段框回归、拟合定框、band 质量受数据量限制）也都只在数据集 2 上成立。
-2. "不降低检测精度"是一个很弱的主张。
-3. 整体精度低（F1 0.48）：模型从零训练，训练集只有约 91 张图。
-4. ~~λ = 0.7 时 attention loss 是检测 loss 的 2.3 倍，没有扫过其他取值。~~ Round 10 扫了 0.1 / 0.3 / 1.5，都不比 0.7 好。
-5. ~~fusion 只试了 concat 一种。~~ Round 8、10 试了 extent 和 gate，都和 concat 没有区别。新问题：**效应量（+0.004 / +0.019）和换显卡带来的差别（+0.013）同量级**，n = 10 的检验分辨不出 0.02 以下的效应。
-6. 56×56 的 attention map 上 band 只有 2 格宽（Round 5 问题 1）。
-7. validation set 合计只有约 70 个目标，选参数有 overfitting 风险（Round 6 中每个 seed 单独选参比全局统一选参差 0.023）。
-8. 用的是最后一个 epoch 的权重，训练末尾 loss 还在波动。
-9. official box 和 HBAT box 的 granularity 不同，论文里要写清楚。
-10. ~~本目录还没提交到 git。~~ 已提交；`runs_cv/` 只入库轻量文件（.gitignore 排除 `*.pth`、`vis/`、`*.npz`），权重分散在 IWAC1 / IWAC2 两台机器上，Round 6 的 refine 若要重做需在有对应 `final.pth` 的机器上跑。
-11. band 标注相对框标注的特有效应只有 +0.025 [+0.002, +0.046]（Round 13），CI 下界贴着 0，Wilcoxon p = 0.11；n = 10 刚够分辨。后处理自由度对等的对照和强检测器上的复现都还没做（下一步 7、8）。Round 16 换了 attention 头之后仍是 +0.027–0.036。
-12. **baseline 的框回归太弱**（Round 14）：只用框标注加一个第二阶段就是 +0.159，超过任何用 band 的方案。凡是"band 让框更准"的主张都要和这个对照比；Round 12 的 +0.072 目前比不过。
-13. Round 14 的第二阶段没有重打分（分数沿用第一阶段），也没有在成簇目标上做专门处理；它是对照，不是调到最好的系统。训练窗口用的是抖动后的 GT 框而不是第一阶段在训练图上的真实输出。
-14. Round 15 的拟合规则是在验证集上（用真实 band）迭代了三版才定下的，NMS 也是看了验证集才加进网格；测试集没有参与，但验证集只有约 70 个目标（见第 7 条）。预测 band 的拟合定框验证 F1 明显高于测试（0.567 / 0.593 对 0.530 / 0.549）。
-15. Round 14 的 oracle（0.756）和 Round 15 的"真实 band + 拟合"（0.658 / 0.719）都是把真值的一部分交给了系统，只能当上限读；其中 Round 14 的 oracle 还用 GT 指定了"这个候选框对着哪个目标"。
-16. 预测 band 的测试 IoU 在三种设计下都只有 0.38–0.48，训练图上可达 0.76（Round 16）。在数据量变大之前，继续改 attention 的结构预期收益很小。
+1. **数据集 1 还没用严格协议跑过**（最大空白）。Round 14–16 的结论也只在数据集 2 上成立。
+2. **baseline 的框回归太弱**（Round 14）：只加 stage 2 就是 +0.159，超过任何用 band 的方案。凡是"band 让框更准"的主张都要和它比。
+3. band 标注相对框标注的特有效应只有 +0.025–0.036，CI 下界贴着 0；scale control 宽高分开和强检测器上的复现都没做。
+4. fusion 效应（+0.004 / +0.019）和换显卡差别（+0.013）同量级，n = 10 分辨不出 0.02 以下。
+5. 预测 band 的测试 IoU 在三种设计下都只有 0.38–0.48，训练图上可达 0.76。数据量变大之前，继续改结构预期收益很小。
+6. "不降低检测精度"是很弱的主张；整体精度低（F1 0.47，从零训练、每折 91 张）。
+7. validation set 只有约 70 个目标，选参有 overfitting 风险（Round 6 逐 seed 选参比全局差 0.023；预测 band 的 hyperbola fit 验证 F1 明显高于测试：原 head 0.567 对 0.530，U-shaped decoder 0.593 对 0.549）。
+8. Round 15 的 fit 规则在验证集上（用真实 band）迭代了三版，NMS 是看了验证集才加的；测试集没参与。
+9. Round 14 的 oracle（0.756）和 Round 15 的真实 band + fit（0.658 / 0.719）都把真值的一部分交给了系统，只能当上限读。Round 14 的 stage 2 没有重打分，训练窗口用的是抖动后的 GT 而不是第一阶段的真实输出：它是对照，不是调到最好的系统。
+10. 用的是最后一个 epoch 的权重，训练末尾 loss 还在波动。
+11. official box 和 HBAT box 的 granularity 不同；HBAT box 按定义是 band 的外接矩形，评估 GT 和方法的归纳偏置一致。
+12. ~~λ 没扫~~（R10）；~~只试了 concat~~（R8、10）；~~56×56 上 band 只有 2 格~~（R16 换成 224×224，测试 IoU 只从 0.38 到 0.42）。
+
+## 附录 D：在新机器上复现 / 续跑
+
+仓库历史 11-15 重置为单个提交。每个 run 的轻量结果已入库；`*.pth`、可视化图、`*.npz`、缓存没有入库。
+
+```bash
+git clone https://github.com/youryugi/shuangquxian.git
+cd shuangquxian
+pip install -r requirements.txt        # torch 按机器的 CUDA 版本装，见文件内注释
+
+# 1. 重建数据目录（datasets/ 不入库，约 1 分钟）
+cd experiments/revision/detector_comparison
+for f in 0 1 2 3 4; do
+  python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source hbat
+  python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source official
+done
+
+# 2. 跑实验（已有 metrics.json 的 run 自动跳过），例如：
+cd ../basic_ds2
+python run_seeds.py --exps hbatbox_aug_none hbatbox_aug_abs --jobs 10 --workers 1
+
+# 3. 汇总全部配对
+python aggregate_cv.py
+```
+
+注意：
+- 换 GPU 后结果不和原机器逐位一致，但 paired initialization 由 CPU seed 决定，跨机器相同。最干净的做法是把要配对的 arm 都在同一张卡上跑。
+- 需要 `final.pth` 的步骤（`infer_bandbox.py infer`、`refine_with_band.py`、`stage2_instance.py --src`）要在有权重的机器上跑，或先重训对应实验。
+
+**11-15 实际执行记录（IWAC1 + IWAC2）**：两台 Linux 机器各一块 RTX 5090，conda 环境 `gpr`（Python 3.10，torch 2.11.0 + cu128）。Round 4 的两个主 arm 和 Round 7 的 oracle 在 5090 上从头重跑，5060 Ti 的结果改名为 `*_win5060ti/`。同一配置在两台 5090 上逐位一致（`train_log.csv`、`preds_*.json` md5 相同），所以配对的两臂可以分在不同机器上。`--jobs 10 --workers 1` 时单 run 约 75 s（stride 8）；10 → 16 个进程总吞吐不变，10 个就是上限。
