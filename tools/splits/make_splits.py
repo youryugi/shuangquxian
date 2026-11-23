@@ -10,6 +10,8 @@
 - 划分单位是“来源组”：按图像相似度把同源图像（同一原图的副本、重叠裁剪、同名剖面系列）合成一组，
   一组只能整体进入训练、验证或测试。
 - 在全部数据上一次定好划分；还没有 HBAT 标注的图也先分好组，补完标注直接使用。
+- 数据集 1 不使用 Roboflow 官方 train / valid / test 划分（官方 test 仅 17 张、被个别图主导，且与 train
+  有同源图像和同一测线），三份合并后重新分组；核查数字由 official_split_audit 写进 README。
 
 划分结构：5 个分组折（按层分配、尽量均衡）。fold 0 的测试集就是“固定测试集”。
 对每个折 k：test = 第 k 折；val = 其余组中约 10%（占全部）；train_pool = 剩余；
@@ -261,6 +263,54 @@ def summarize(name, items, split, target_key):
     return '\n'.join(lines)
 
 
+def official_split_audit(items, S, th, name_series):
+    """数据集 1：Roboflow 官方 train / valid / test 划分的核查，说明为什么不用它（写进 README）。"""
+    sims = collections.defaultdict(float)
+    for (a, b), v in S.items():
+        sims[(a, b)] = sims[(b, a)] = v
+    by = collections.defaultdict(list)
+    for k, it in items.items():
+        by[it['roboflow_split']].append(k)
+    lines = ['#### 为什么不用 Roboflow 官方划分', '',
+             '官方导出包自带 train / valid / test 三份。本项目把三份合并成 170 个原图名，按上面的来源组重新做 5 折，'
+             '不使用官方划分。理由（由本脚本从数据直接算出）：', '',
+             '| 官方划分 | 原图名 | 图像文件 | 官方目标 | 目标最多的一张图 | 与 train 同源的原图名（相似度 > 阈值 / > 0.85） |',
+             '|---|---|---|---|---|---|']
+    for sp in ('train', 'valid', 'test'):
+        ks = sorted(by[sp])
+        n_t = {k: items[k]['n_targets_roboflow'] for k in ks}
+        tot = sum(n_t.values())
+        top = max(ks, key=lambda k: n_t[k])
+        if sp == 'train':
+            leak = '—'
+        else:
+            best = {k: max(sims[(k, t)] for t in by['train']) for k in ks}
+            hi = sorted(k for k in ks if best[k] > th)
+            leak = (f'{len(hi)} / {sum(best[k] > 0.85 for k in ks)}：' + '、'.join(hi)) if hi else '0'
+        lines.append(f'| {sp} | {len(ks)} | {sum(len(items[k]["files"]) for k in ks)} | {tot} | '
+                     f'{top}：{n_t[top]} 个（{n_t[top] / tot:.0%}） | {leak} |')
+    cross = sorted((a, b, sims[(a, b)]) for a in by['valid'] for b in by['test'] if sims[(a, b)] > th)
+    series = collections.defaultdict(collections.Counter)
+    for k, it in items.items():
+        s = name_series(k)
+        if s:
+            series[s][it['roboflow_split']] += 1
+    spread = {s: c for s, c in series.items() if len(c) > 1}
+    rebar = {sp: sum(items[k]['n_targets_roboflow'] for k in by[sp] if items[k]['category'] == 'rebar')
+             for sp in ('valid', 'test')}
+    lines += ['',
+              f'- valid 与 test 之间同源（相似度 > {th}）：'
+              + ('，'.join(f'{a} ↔ {b}（{v:.2f}）' for a, b, v in cross) if cross else '无') + '。',
+              '- 同一测线的系列裁剪被分进了不同的官方划分：'
+              + ('；'.join(f'{s}（' + '，'.join(f'{sp} {c[sp]}' for sp in ('train', 'valid', 'test') if c[sp]) + '）'
+                          for s, c in sorted(spread.items())) if spread else '无') + '。',
+              f'- valid / test 的官方目标中，钢筋排分别占 {rebar["valid"]} / {rebar["test"]} 个。',
+              '- 官方 train 的每个原图名有 3 份光度副本，它们都留在 train 内，没有跨进 valid / test（这一点官方划分是对的）。',
+              '- 结论：官方 test 太小，结果被个别图主导，而且与训练集有同源图像和同一测线，不能作为正式评估。'
+              '图像与标签一张不删，只是重新划分；分组规则在看任何结果之前定好。', '']
+    return '\n'.join(lines)
+
+
 def test_fold_of(split):
     return {g: k for k, f in enumerate(split['folds']) for g in f['test']}
 
@@ -349,6 +399,10 @@ def main():
           f'验证集约占 {int(VAL_FRAC * 100)}%；嵌套训练子集 {", ".join(f"{int(p * 100)}%" for p in SUBSET_FRACS)}。',
           f'- 相似度阈值：数据集 1 {args.th1}，数据集 2 {args.th2}。数据集 1 另把 `lineNNNN_0-K` 同名剖面系列强制合组。',
           '- 数据集 1 的 `category`（pipe / rebar）来自 2026-11-11 目检，待逐张确认；只用于分层和按类别报告，不用于排除。',
+          '- 数据集 1 不使用 Roboflow 官方 train / valid / test 划分（`items.*.roboflow_split` 只作记录），'
+          '理由见下文“为什么不用 Roboflow 官方划分”。',
+          '- 数据集 1 每个原图名的 3 份光度副本同属一组；训练用全部副本，验证 / 测试只评 `eval_file` 那一份；'
+          'HBAT 也只标 `eval_file` 那一份（进度与待标清单：`tools/annotation/d1_todo.py`）。',
           '- 查看分组：`dataset1_groups.md`、`dataset2_groups.md`（每组一行）；`groups_gallery.html`（缩略图，在本机浏览器打开）。', '']
     gallery = []
     for fname, name, items, S, th, ns, tkey in (
@@ -370,6 +424,8 @@ def main():
             json.dump(doc, fh, ensure_ascii=False, indent=1)
         s = summarize(name, items, split, tkey)
         md += [s, f'测试组与训练/验证组之间的最大图像相似度：{worst:.3f}（阈值 {th}）', '']
+        if ns is d1_name_series:
+            md.append(official_split_audit(items, S, th, ns))
         print(s)
         write_group_table(os.path.join(out_dir, fname.split('_')[0] + '_groups.md'), name, items, split, tkey)
         gallery.append((fname.split('_')[0], name, items, split, tkey))

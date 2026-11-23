@@ -359,6 +359,7 @@ python tools/annotation/hbat.py --folder data/primary_roboflow/original_GPR.v1i.
     - 可用之处：这是数据集作者自己的“重复标注一致性”，可作为官方标注噪声的基线，用来对照 HBAT 的标注者间一致性和 HBAT 框 vs 官方框的一致性（R1-4、R2-4）；也说明 IoU 0.5 已接近官方标注自身的分歧水平。
 - [x] 生成划分文件 `data/splits/`（2026-11-11，`tools/splits/make_splits.py`，结果见 `data/splits/README.md`），**在全部数据上一次定好**，还没补标注的图先占好位置，补完直接用，测试集不再变动：
   - 按相似度聚类，并把同名系列（如 `line2888_*`）强制合成一组。阈值统一取 0.75（高于两个数据集全部图像对相似度的 99% 分位：0.726、0.65）。结果：数据集 1 的 170 个原图名合成 97 个来源组（最大组 29 个 `line*`）；数据集 2 的 131 张原图合成 109 个来源组。
+  - **数据集 1 不用 Roboflow 官方 train / valid / test 划分**（2026-11-22 核查，数字自动写在 `data/splits/README.md`“为什么不用 Roboflow 官方划分”）：官方 test 只有 17 张、72 个目标，其中 46% 来自一张钢筋排图 `3254`；valid 17 张中 9 张、test 17 张中 10 张与 train 同源（相似度 > 0.75）；valid ↔ test 也有两对同源；`line2888` 同一测线分在三份里（train 16、valid 3、test 2）。论文 §IV-A 写一句：合并官方三份、按来源分组重新划分，图像与标签不删。
   - 待办：确认 25 个钢筋排原图名的类别标签；如有改动，重新运行脚本。
   - 待办：`line*` 69 张可能来自很少几条长剖面，相似度只并上了 29 张。补一个更严格的对照：整类 `line*` 留出测试（leave-family-out），在论文中作为敏感性分析报告。
   - 每个数据集切出：固定测试集（20% 的来源）、验证集（10%）、5 个分组折，以及嵌套的训练子集（25 / 50 / 75 / 100%）。
@@ -378,6 +379,13 @@ python tools/annotation/hbat.py --folder data/primary_roboflow/original_GPR.v1i.
     - 原来未使用的 56 张有目标的原图，共 89 个目标。已有旧格式标注（自标），先自动转成 HBAT 初值，再对照官方框（取自 `aug_6`）在 HBAT 里调整。目检结果：基本是被边界截断、很弱、互相重叠的双曲线，正好是困难样本。
     - 已用的 71 张原图：HBAT 标注在增强图上；其中 70 张有 `aug_6`（与原图几乎相同），标注可以直接迁移到原图，另外 1 张需要重标。
   - 数据集 1：
+    - **入口**（2026-11-22）：`python tools/annotation/d1_todo.py` 把 170 个原图名各一份（`eval_file`，文件名与官方导出包相同）连同官方框复制到 `data/primary_roboflow/hbat/images`、`labelTxt`，打印进度，写待标清单 `hbat/todo.txt`；再用它打印的 `hbat.py --folder data/primary_roboflow/hbat/images --only … --out data/primary_roboflow/hbat` 标注。官方导出包保持只读。下游对 3 份副本都用 `eval_file` 的标注。
+    - **重复截图**（2026-11-22，`tools/annotation/d1_duplicates.py`，结果 `data/primary_roboflow/hbat/duplicates.json`）：170 个原图名里有 10 组共 23 张是同一张雷达图的重复截图（显示设置或裁剪略不同，双曲线位置相同），例如 3289/3290/3291/3292/3296、line24138_0 = line2888_0-78、hyperbola49 = hyperbola64。判定：同组内对齐后小块相关中位数 ≥ 0.85（重复图都 ≥ 0.90，钢筋排相邻测线最高 0.76）。每组只标代表图，`d1_todo.py` 自动复制给其余 13 张。这 10 组都已在同一来源组内，不造成泄漏。
+      - 可写进论文 / 回复的事实：**同一张图的官方框在各截图上是分别画的、互不一致**（框数不同，对应框 IoU 常在 0.1–0.5），和数据集 2 官方六个增强版本的情况一样，可作为官方标注噪声的证据。旧标注（legacy）在同一张图的两份截图上 band IoU 也只有 0.46–0.88。
+      - 待定：评估时这 13 张重复图是否只计一次（目前测试集里会重复计数，如 3289 组 5 张都在 fold 2）。当日进度：170 个原图名中 missing 57、legacy_init（待核对）106、partial 3（3222、3254、hyperbola26）、done 4。11-15 在官方 test 文件夹里标的 7 张已并入 `data/primary_roboflow/hbat/annotations.json`，官方目录恢复原样。
+    - **裁掉坐标轴白边**（2026-11-23，`tools/annotation/d1_crop.py` + 人工核对工具 `crop_tool.py`，结果 `data/primary_roboflow/hbat/crop.json`）：约 100 张截图的上 / 左（部分右 / 下）带坐标轴刻度、数字、状态栏。这些区域不是数据；HBAT 模型以图像顶边为地表（a = y_vertex），顶部白边还会让地表错位。做法：每张图人工确认绘图区框，裁剪后统一缩放到 640×640（与 Roboflow 导出时的拉伸一致；不用补白，补白等于把白边加回来）。版式相同的截图白边相同，7 种版式（68 张）给统一建议框；line* 系列 71 张无白边；其余按自动检测给初值，全部以人工确认为准。确认后 `d1_todo.py` 应用：hbat/images、hbat/labelTxt 重新生成，已有标注换算（span × 横向缩放，thickness/tail × 纵向缩放，slope 在新地表下重拟合；中心线偏差 > 1 px 的目标标 `crop_refit_rms`，该图列为 review 待核）。下游 `common.load_image / official_boxes` 对 3 份光度副本做同样的裁剪缩放（`crop.json` 的 `applied`）。
+      - 论文方法 / 数据部分要写：数据集 1 的输入是裁掉坐标轴区域后的绘图区，统一 640×640；裁剪框人工确认，文件随数据发布。
+      - 11-22 晚到 11-23 的 HBAT 会话没加 `--out`，13 张（3170–3202）标注写进了 `hbat/images/`；`d1_todo.py` 现在会自动合并这类误存文件（原件进 `hbat/backup/`）。
     - 钢筋排约 25 个原图名、302 个目标：用 Roboflow 的框自动换算 HBAT 初值，再快速检查。
     - 原论文排除的约 11 组非钢筋图，以及 34 张新图中约 28 张管线类图。
     - 已选 106 组中 Roboflow 比 HBAT 多标的 24 个目标：按“官方框一个不漏”的原则全部处理。是双曲线就补标；套不上双曲线的标“无法参数化”并保留记录。

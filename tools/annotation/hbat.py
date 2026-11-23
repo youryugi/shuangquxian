@@ -15,6 +15,10 @@ Usage
     python hbat.py --folder DIR --out OUTDIR         # write annotations / timelog / rect json to OUTDIR
                                                      # (default: next to the images; use --out to keep
                                                      # official data folders untouched)
+    python hbat.py --folder DIR --only LIST.txt      # show only the images named in LIST.txt (one file
+                                                     # name per line, '#' comments allowed), e.g. one
+                                                     # copy per name of a Roboflow export; see
+                                                     # tools/annotation/d1_todo.py
 
 Without --gt the tool looks for  <folder>/../labelTxt  (Roboflow YOLOv5-OBB export, when the
 folder is named "images"), then <folder>/gt_boxes.json, <folder>/../gt_boxes.json, and any
@@ -454,8 +458,9 @@ def assign_gt_box(obj, gt_boxes, img_size):
 
 class HyperbolaAnnotator:
     def __init__(self, root, annotator=None, gt_source=None, show_gt=True, folder=None, out_dir=None,
-                 extend=False, pad_side=0.2, pad_top=0.5):
+                 extend=False, pad_side=0.2, pad_top=0.5, only=None):
         self.root = root
+        self.only = set(only) if only else None   # None = every image in the folder
         # extended canvas: grey margin left/right (pad_side) and on top (pad_top), none at the bottom
         self.extend = tk.BooleanVar(value=bool(extend))
         self.pad_side = max(0.0, float(pad_side))
@@ -812,6 +817,8 @@ class HyperbolaAnnotator:
     def open_folder(self, folder):
         paths = [os.path.join(folder, f) for f in sorted(os.listdir(folder))
                  if f.lower().endswith(SUPPORTED_EXTS)]
+        if self.only is not None:
+            paths = [p for p in paths if os.path.basename(p) in self.only]
         if not paths:
             messagebox.showerror("Error", "No images found in the selected folder.")
             return
@@ -832,6 +839,7 @@ class HyperbolaAnnotator:
         self.load_annotations_file()
         self.current_image_name = None
         self.log_event("session_start", folder=folder, out_dir=self.out_dir, n_images=len(paths),
+                       only=None if self.only is None else len(self.only),
                        annotations=os.path.basename(self.annotations_path),
                        gt=None if self.gt_source is None else self.gt_source.path,
                        show_gt=self.show_gt.get(), extend=self.extend.get(),
@@ -1487,12 +1495,21 @@ def main(argv=None):
                     help="extended canvas: left/right margin, fraction of width (default 0.2)")
     ap.add_argument("--pad-top", type=float, default=0.5,
                     help="extended canvas: top margin, fraction of height (default 0.5)")
+    ap.add_argument("--only", help="text file of image file names to show (one per line, '#' comments); "
+                                   "other images in the folder are hidden")
     args = ap.parse_args(argv)
+
+    only = None
+    if args.only:
+        with open(args.only, "r", encoding="utf-8") as f:
+            only = [ln.split("#", 1)[0].strip() for ln in f]
+        only = [ln for ln in only if ln]
 
     root = tk.Tk()
     app = HyperbolaAnnotator(root, annotator=args.annotator, gt_source=args.gt,
                              show_gt=not args.hide_gt, folder=args.folder, out_dir=args.out,
-                             extend=args.extend, pad_side=args.pad_side, pad_top=args.pad_top)
+                             extend=args.extend, pad_side=args.pad_side, pad_top=args.pad_top,
+                             only=only)
     root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / 72.0)
     root.mainloop()
     return app

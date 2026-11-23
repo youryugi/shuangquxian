@@ -8,6 +8,10 @@ Data sources (see data/README.md and paper/revision/revision_map.md):
   * official GT   ds1: Roboflow YOLOv5-OBB labelTxt (axis-aligned rectangles as 4 points)
                   ds2: data/additional_utilities/gt_boxes_official_aug6/<id>.txt (YOLO, normalized)
   * band masks    rasterized with tools/annotation/hbat.py (the same code the annotator sees)
+  * ds1 crop      data/primary_roboflow/hbat/crop.json: the screenshot axis margins are cropped away and the
+                  plot area resized to 640x640 (tools/annotation/d1_crop.py). HBAT annotations live in that
+                  working frame, so every copy of an item is rendered in the same frame here (image_frame /
+                  load_image) and the official boxes are mapped into it (official_boxes).
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ if str(TOOLS_ANNOTATION) not in sys.path:
     sys.path.insert(0, str(TOOLS_ANNOTATION))
 
 import hbat  # noqa: E402  (tools/annotation/hbat.py; imports tkinter but creates no window)
+import d1_crop  # noqa: E402  (tools/annotation/d1_crop.py; ds1 crop frame)
 
 def _first_existing(*rel):
     """The data folder is being reorganised (2026-11); accept the new location first, old ones as fallback."""
@@ -45,6 +50,7 @@ DATASETS = {
         "hbat_json": _first_existing("data/primary_roboflow/hbat/annotations.json",
                                      "data/primary_roboflow/selected_318_hbat/annotations.json"),
         "box_source": "roboflow_obb",
+        "crop_json": REPO / "data/primary_roboflow/hbat/crop.json",
     },
     "ds2": {
         "name": "dataset2_mendeley",
@@ -77,6 +83,35 @@ def save_json(obj, path, indent=1):
 def image_size(path):
     with Image.open(path) as im:
         return im.size  # (w, h)
+
+
+# ----------------------------------------------------------------------------- working frame (ds1 crop)
+_CROPS = {}
+
+
+def image_frame(ds, item_id):
+    """(M, out_size) mapping official-image pixels to the annotation working frame, or None (identity).
+
+    Uses the crop *applied* in the HBAT folder (crop.json 'applied'), i.e. the frame the HBAT annotations of
+    this item are stored in; items whose crop is not yet confirmed stay in the official frame."""
+    path = DATASETS[ds].get("crop_json")
+    if path is None or not Path(path).exists():
+        return None
+    if ds not in _CROPS:
+        _CROPS[ds] = load_json(path)
+    c = _CROPS[ds]["crops"].get(item_id)
+    if not c or not c.get("applied"):
+        return None
+    return d1_crop.frame_matrix(c["applied"]), tuple(_CROPS[ds]["output_size"])
+
+
+def load_image(ds, item_id, file):
+    """Image of one copy in the working frame -> (BGR array or None if unchanged, size (w, h))."""
+    fr = image_frame(ds, item_id)
+    if fr is None:
+        return None, image_size(REPO / file)
+    c = _CROPS[ds]["crops"][item_id]
+    return d1_crop.render(d1_crop.imread(str(REPO / file)), c["applied"], fr[1]), fr[1]
 
 
 # ----------------------------------------------------------------------------- splits
@@ -133,12 +168,19 @@ def _parse_yolo_txt(path, img_w, img_h):
 
 
 def official_boxes(ds, item_id, item, file, img_size):
-    """Axis-aligned official GT boxes in pixels (x1, y1, x2, y2), clipped to the image."""
+    """Axis-aligned official GT boxes in pixels (x1, y1, x2, y2), clipped to the image.
+
+    img_size is the size in the working frame; for cropped ds1 items the boxes are mapped into it."""
     w, h = img_size
     cfg = DATASETS[ds]
     if cfg["box_source"] == "roboflow_obb":
         idx = item["files"].index(file) if file in item["files"] else 0
         boxes = _parse_obb_txt(REPO / item["labels"][idx])
+        fr = image_frame(ds, item_id)
+        if fr is not None:
+            M = fr[0]
+            boxes = [[M[0, 0] * x1 + M[0, 2], M[1, 1] * y1 + M[1, 2], M[0, 0] * x2 + M[0, 2], M[1, 1] * y2 + M[1, 2]]
+                     for x1, y1, x2, y2 in boxes]
     elif cfg["box_source"] == "official_aug6":
         boxes = _parse_yolo_txt(cfg["box_dir"] / f"{item_id}.txt", w, h)
     else:
@@ -165,10 +207,12 @@ def boxes_to_yolo_lines(boxes, img_size, cls=0):
 def _candidate_keys(item_id, item, file):
     """Annotation-file keys to try, most trustworthy first.
 
-    ds1: the three photometric copies share identical geometry, so any annotated copy works.
+    ds1: the three photometric copies share identical geometry. The designated eval_file copy is the one
+         annotated / reviewed in HBAT (tools/annotation/d1_todo.py), so it is used for every copy; the other
+         copies' keys only hold stale legacy_init seeds.
     ds2: HBAT annotations were made on augmented images; aug_6 (and aug_1) keep the geometry of the original.
     """
-    keys = [os.path.basename(file)]
+    keys = [os.path.basename(item["eval_file"]), os.path.basename(file)]
     legacy = list(item.get("legacy_hbat_files", []))
     legacy.sort(key=lambda p: (0 if p.endswith("_aug_6.jpg") else 1 if p.endswith("_aug_1.jpg") else 2, p))
     keys += [os.path.basename(p) for p in legacy]
