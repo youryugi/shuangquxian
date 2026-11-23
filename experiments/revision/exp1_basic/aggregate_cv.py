@@ -24,7 +24,9 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 DATASETS = HERE.parent / "shared" / "datasets"
 sys.path.insert(0, str(HERE.parent / "shared"))
+sys.path.insert(0, str(HERE / "dataset1"))
 from evaluate import ap50, collect, prf_at, select_conf  # noqa: E402
+from d1_exps import d1_pairs  # noqa: E402
 
 DEFAULT_PAIRS = ["hbatbox_aug_none:hbatbox_aug_abs", "aug_none:aug_abs", "hbatbox_none:hbatbox_abs", "basic_none:basic_abs",
                  # 第 7 轮
@@ -148,7 +150,7 @@ DEFAULT_PAIRS += ["hbatbox_flipfix_boxmask:hbatbox_flipfix_abs"]   # 100% 一列
 
 def data_dir_of(run_info, fold):
     suffix = "_hbatbox" if run_info.get("box_source") == "hbat" else ""
-    return DATASETS / f"ds2_f{fold}_s100{suffix}"
+    return DATASETS / f"{run_info.get('dataset', 'ds2')}_f{fold}_s100{suffix}"
 
 
 def pooled_metrics(run_dirs, gt_name="gt_boxes.json"):
@@ -192,10 +194,15 @@ def paired(a, b, n_boot=10000, seed=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default=str(HERE / "runs_cv"))
-    ap.add_argument("--pairs", nargs="+", default=DEFAULT_PAIRS)
+    ap.add_argument("--pairs", nargs="+", default=None)
     ap.add_argument("--folds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
+    ap.add_argument("--dataset", default="ds2", choices=["ds1", "ds2"],
+                    help="ds1：读 <runs>/ds1/，默认配对用 dataset1/d1_exps.py，输出 cv_summary_ds1.{json,md}（不覆盖 ds2 的）")
     args = ap.parse_args()
-    runs = Path(args.runs) / "ds2"
+    if args.pairs is None:
+        args.pairs = d1_pairs() if args.dataset == "ds1" else DEFAULT_PAIRS
+    out_stem = "cv_summary" if args.dataset == "ds2" else f"cv_summary_{args.dataset}"
+    runs = Path(args.runs) / args.dataset
 
     # 收集：exp -> seed -> {fold: run_dir}
     tree = defaultdict(lambda: defaultdict(dict))
@@ -261,11 +268,11 @@ def main():
                      f"{f['wilcoxon_p']:.3f} | {f['wins']}/{f['ties']}/{f['losses']} | {a_['delta_mean']:+.3f} [{a_['ci95'][0]:+.3f}, {a_['ci95'][1]:+.3f}] | "
                      f"{a_['wilcoxon_p']:.3f} | {a_['wins']}/{a_['n']} | {o['delta_mean']:+.3f} |")
     out = Path(args.runs)
-    with open(out / "cv_summary.json", "w", encoding="utf-8") as f:
+    with open(out / f"{out_stem}.json", "w", encoding="utf-8") as f:
         json.dump({"per_exp": {e: {str(s): r for s, r in d.items()} for e, d in results.items()}, "pairs": pairs_out}, f, ensure_ascii=False, indent=1)
-    (out / "cv_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (out / f"{out_stem}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
-    print(f"\n-> {out / 'cv_summary.md'}")
+    print(f"\n-> {out / (out_stem + '.md')}")
 
 
 if __name__ == "__main__":

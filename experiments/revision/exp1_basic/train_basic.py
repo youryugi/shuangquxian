@@ -75,6 +75,49 @@ def configure_attn_stride(stride):
     ATTN_STRIDE = stride
 
 
+# 数据集 1（dataset1/README.md）：rebar 目标在 224 输入上只有约 8×18 px、相邻顶点间距中位 10 px，
+# 所以输入尺寸和热图 sigma 做成参数。默认值 = 数据集 2 的设置，ds2 的 run 逐位不变。
+HM_SIGMA_MODE = "fixed"   # fixed = 所有目标同一个 HM_SIGMA（格子）；box = CenterNet 原版按框大小算半径
+
+
+def configure_input_size(size):
+    """输入边长（正方形）。必须是 32 的倍数（三次下采样 + attention / 检测头步长）。"""
+    global INPUT_SIZE
+    assert size % 32 == 0, size
+    INPUT_SIZE = (size, size)
+
+
+def configure_hm_sigma(spec):
+    """None = 原样（6 × 8 / 检测头步长 个格子，configure_det_stride 已设好）；数字 = 固定 sigma（热图格子）；
+    'box' = CenterNet 的 gaussian_radius（min_overlap 0.7），sigma = (2r + 1) / 6，每个目标各自算。"""
+    global HM_SIGMA, HM_SIGMA_MODE
+    if spec is None:
+        return
+    if spec == "box":
+        HM_SIGMA_MODE = "box"
+    else:
+        HM_SIGMA_MODE, HM_SIGMA = "fixed", float(spec)
+
+
+def gaussian_radius(h, w, min_overlap=0.7):
+    """CenterNet（Zhou et al. 2019）原版实现，h / w 是热图格子数。"""
+    b1 = h + w; c1 = w * h * (1 - min_overlap) / (1 + min_overlap)
+    r1 = (b1 + np.sqrt(b1 ** 2 - 4 * c1)) / 2
+    b2 = 2 * (h + w); c2 = (1 - min_overlap) * w * h
+    r2 = (b2 + np.sqrt(b2 ** 2 - 16 * c2)) / 2
+    a3 = 4 * min_overlap; b3 = -2 * min_overlap * (h + w); c3 = (min_overlap - 1) * w * h
+    r3 = (b3 + np.sqrt(b3 ** 2 - 4 * a3 * c3)) / 2
+    return min(r1, r2, r3)
+
+
+def target_sigma(bw, bh):
+    """bw / bh：输入分辨率下的框宽高（像素）。"""
+    if HM_SIGMA_MODE == "fixed":
+        return HM_SIGMA
+    r = max(0, int(gaussian_radius(bh / HM_STRIDE, bw / HM_STRIDE)))
+    return (2 * r + 1) / 6.0
+
+
 PAPER_HM_THRESH = 0.375   # 原脚本解码阈值（参照口径）
 PAPER_MAX_DET = 5
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -157,7 +200,7 @@ class PreparedDataset(Dataset):
             cx, cy = x1 * sx + bw / 2.0, y1 * sy + bh / 2.0
             fx, fy = cx / HM_STRIDE, cy / HM_STRIDE
             xi = int(np.clip(round(fx), 0, self.gw - 1)); yi = int(np.clip(round(fy), 0, self.gh - 1))
-            render_gaussian(hm, fx, fy, HM_SIGMA)
+            render_gaussian(hm, fx, fy, target_sigma(bw, bh))
             wh[0, yi, xi] = bw / self.input_w; wh[1, yi, xi] = bh / self.input_h
             off[0, yi, xi] = fx - xi; off[1, yi, xi] = fy - yi
             peak[yi, xi] = 1.0
@@ -230,6 +273,28 @@ class AugWrapper(Dataset):
             return img, hm, wh, off, peak, band, meta
         # 和旧版本一样每个样本取一次 random.random()（编码本身不用 random），所以每个样本翻不翻和旧 run 相同
         return self.ds.encode(idx, flip=random.random() < 0.5)
+
+
+class OneCopyWrapper(Dataset):
+    """数据集 1：训练集每个原图有 3 份只差亮度 / 噪声的副本（Roboflow 导出自带）。--copy-sampling one 时
+    每轮每个 item 只随机取一份，一轮的样本数 = item 数（和 val / test 的口径、和 ds2 的步数一致），副本起亮度增强的作用。
+    每个样本先抽副本、再（--augment 时）抽翻转，两次 random.random() 的次数不随 arm 变，配对的两臂看到同样的样本。"""
+
+    def __init__(self, ds, augment):
+        assert not FLIP_LEGACY, "--flip-legacy 不和 --copy-sampling one 组合"
+        self.ds, self.augment = ds, augment
+        by_item = {}
+        for i, stem in enumerate(ds.stems):
+            by_item.setdefault(ds.gt[stem].get("item", stem), []).append(i)
+        self.groups = [by_item[k] for k in sorted(by_item)]
+
+    def __len__(self):
+        return len(self.groups)
+
+    def __getitem__(self, idx):
+        g = self.groups[idx]
+        k = g[min(int(random.random() * len(g)), len(g) - 1)]
+        return self.ds.encode(k, flip=self.augment and random.random() < 0.5)
 
 
 # ───────────────────────── 模型（原样） ─────────────────────────
@@ -560,6 +625,12 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--pred-thresh", type=float, default=0.001)
     ap.add_argument("--pred-max-det", type=int, default=50)
+    # 数据集 1（dataset1/README.md）：默认值都等于数据集 2 的原设置
+    ap.add_argument("--input-size", type=int, default=INPUT_SIZE[0], help="输入边长（正方形，32 的倍数）；ds2 = 224")
+    ap.add_argument("--hm-sigma", default=None,
+                    help="热图高斯 sigma：不给 = 原样（6 × 8 / det_stride 个格子）；数字 = 固定格子数；box = CenterNet 按框大小")
+    ap.add_argument("--copy-sampling", default="all", choices=["all", "one"],
+                    help="训练集同一 item 的多份副本：all = 全部当独立样本（原样）；one = 每轮每个 item 随机取一份（ds1）")
     args = ap.parse_args()
     global FLIP_LEGACY
     FLIP_LEGACY = args.flip_legacy   # 在建 DataLoader 之前设好（Linux fork 的 worker 会继承）
@@ -574,19 +645,23 @@ def main():
     print(f"device={device}  run_dir={run_dir}", flush=True)
 
     set_seed(args.seed)
+    configure_input_size(args.input_size)
     configure_det_stride(args.det_stride)
+    configure_hm_sigma(args.hm_sigma)
     configure_attn_stride(1 if (args.attn_head == "unet" and args.mode == "abs") else 4)
     tr = PreparedDataset(data_dir, "train", args.mask_dir, subset_frac=args.train_frac, subset_seed=1000 + fold,
                          weight_dir=args.attn_weight_dir)
     va = PreparedDataset(data_dir, "val", args.mask_dir)
     te = PreparedDataset(data_dir, "test", args.mask_dir)
     print(f"train {len(tr)}  val {len(va)}  test {len(te)}  mode={args.mode} attn_block={args.attn_block} lam={args.lam_att} fuse={args.fuse} "
-          f"epochs={args.epochs} seed={args.seed} augment={args.augment} data={data_dir.name}", flush=True)
+          f"epochs={args.epochs} seed={args.seed} augment={args.augment} data={data_dir.name} "
+          f"input={INPUT_SIZE[0]} hm_sigma={'box' if HM_SIGMA_MODE == 'box' else HM_SIGMA} copy_sampling={args.copy_sampling}", flush=True)
     pin = device.type == "cuda"
     # 数据顺序（和 worker 内的翻转随机数）用独立生成器，两臂每轮看到的样本顺序完全相同
     order_gen = torch.Generator()
     order_gen.manual_seed(seed_of_run := args.seed)
-    tl = DataLoader(AugWrapper(tr) if args.augment else tr, batch_size=BATCH, shuffle=True, num_workers=args.workers, pin_memory=pin,
+    train_view = OneCopyWrapper(tr, args.augment) if args.copy_sampling == "one" else (AugWrapper(tr) if args.augment else tr)
+    tl = DataLoader(train_view, batch_size=BATCH, shuffle=True, num_workers=args.workers, pin_memory=pin,
                     persistent_workers=args.workers > 0, worker_init_fn=_worker_init, collate_fn=collate, generator=order_gen)
 
     model = build_model(args.mode == "abs", args.fuse, seed_of_run, oracle=(args.mode == "oracle"), det_stride=args.det_stride,
@@ -625,7 +700,9 @@ def main():
                 model=f"AttnBBoxNet(base_ch={BASE_CH}, 3 down blocks, CenterNet head, det_stride={args.det_stride})",
                 pretrained=False, mode=args.mode, lam_att=args.lam_att if args.mode == "abs" else None, fuse=args.fuse,
                 oracle_band=(args.mode == "oracle"), attn_block=args.attn_block, det_stride=args.det_stride, attn_head=args.attn_head, attn_stride=ATTN_STRIDE,
-                train_frac=args.train_frac, n_train=len(tr),
+                train_frac=args.train_frac, n_train=len(tr), n_train_per_epoch=len(train_view),
+                hm_sigma=("box (CenterNet gaussian_radius, min_overlap 0.7)" if HM_SIGMA_MODE == "box" else HM_SIGMA),
+                copy_sampling=args.copy_sampling,
                 mask_dir=args.mask_dir, attn_weight_dir=args.attn_weight_dir, augment=args.augment,
                 flip=("legacy (array flip, 8 px bug)" if args.flip_legacy else "geometric (fixed 2026-11-21)") if args.augment else None,
                 box_source=manifest.get("box_source"), fold=fold,

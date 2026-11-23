@@ -42,16 +42,34 @@ import torch
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "shared"))
-from train_basic import AttnBBoxNet, BASE_CH, PreparedDataset, configure_attn_stride, configure_det_stride, device, predict  # noqa: E402
-from refine_with_band import INPUT_SIZE, MODES, SEED_GRID, T_GRID, attn_to_band, gt_band, refine_image  # noqa: E402
+from train_basic import (AttnBBoxNet, BASE_CH, PreparedDataset, configure_attn_stride, configure_det_stride,  # noqa: E402
+                         configure_input_size, device, predict)
+import refine_with_band  # noqa: E402
+from refine_with_band import MODES, SEED_GRID, T_GRID, attn_to_band, gt_band, input_hw, refine_image  # noqa: E402
+import fit_hyperbola  # noqa: E402
 from fit_hyperbola import apply_fits, fit_image  # noqa: E402
 from extend_fit import extend_image  # noqa: E402
 from evaluate import box_iou, collect, evaluate_run, prf_at, select_conf  # noqa: E402
+sys.path.insert(0, str(HERE / "dataset1"))
+from d1_exps import D1_SRC_EXPS, d1_variants  # noqa: E402
 
+DS = "ds2"
 RUNS = HERE / "runs_cv" / "ds2"
 CACHE = HERE / "runs_cv" / "bandbox_cache"
 OUT = HERE / "runs_cv" / "bandbox"
 DATASETS = HERE.parent / "shared" / "datasets"
+
+
+def set_dataset(ds):
+    """--dataset：数据集 2 的路径保持原样；数据集 1 的 run、缓存、选参结果都单独放（runs_cv/ds1/、bandbox_cache_ds1/、bandbox_ds1/）。
+    同时切换 refine_with_band 读掩码的数据目录和 fit_hyperbola 的 slope 网格。在建进程池之前调用（fork 的子进程继承）。"""
+    global DS, RUNS, CACHE, OUT, FIT_CACHE
+    DS, RUNS = ds, HERE / "runs_cv" / ds
+    CACHE = HERE / "runs_cv" / ("bandbox_cache" if ds == "ds2" else f"bandbox_cache_{ds}")
+    OUT = HERE / "runs_cv" / ("bandbox" if ds == "ds2" else f"bandbox_{ds}")
+    FIT_CACHE = CACHE / "fit"
+    refine_with_band.set_dataset(ds)
+    fit_hyperbola.configure_slopes(ds)
 FOLDS, SEEDS = list(range(5)), list(range(10))
 SRC_EXPS = ("hbatbox_aug_none", "hbatbox_aug_abs", "hbatbox_aug_oracle", "hbatbox_aug_boxmask",
             "hbatbox_aug_abs_unet", "hbatbox_aug_boxmask_unet")       # 后两个：第 16 轮
@@ -72,11 +90,12 @@ SRC_EXPS = SRC_EXPS + ANN_SRCS
 GENERIC_SRCS = tuple(f"hbatbox_flipfix_{b}" for b in ("se", "cbam", "nonlocal", "coord"))
 UNSUP_SRC = "hbatbox_flipfix_unsup"
 SRC_EXPS = SRC_EXPS + GENERIC_SRCS + (UNSUP_SRC,)
+SRC_EXPS = SRC_EXPS + D1_SRC_EXPS          # 数据集 1（dataset1/d1_exps.py），配合 --dataset ds1
 K_GRID = (1.0, 1.05, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5, 1.6)
 
 
 def data_dir(fold):
-    return DATASETS / f"ds2_f{fold}_s100_hbatbox"
+    return DATASETS / f"{DS}_f{fold}_s100_hbatbox"
 
 
 def run_dir(exp, fold, seed):
@@ -98,6 +117,7 @@ def infer(exps=SRC_EXPS, force=False):
                 continue
             info = json.load(open(rd / "run_info.json", encoding="utf-8"))
             mode = info["mode"]
+            configure_input_size(info.get("imgsz", 224))
             configure_det_stride(info.get("det_stride", 8))
             configure_attn_stride(info.get("attn_stride", 4))
             model = AttnBBoxNet(in_ch=1, base_ch=BASE_CH, use_attn=(mode == "abs"), fuse=info["fuse"],
@@ -169,7 +189,8 @@ def fits_for(src, fold, seed, phase, tkey):
         dets, metas, attn = load_cache(src, fold, seed, phase)
         out = {}
         for stem, d in dets.items():
-            band = gt_band(fold, phase, stem) if tkey == "gt" else attn_to_band(attn[stem], tkey)
+            hw = input_hw(metas[stem])
+            band = gt_band(fold, phase, stem, hw) if tkey == "gt" else attn_to_band(attn[stem], tkey, hw)
             out[stem] = {str(i): v for i, v in fit_image(d, band, metas[stem]["scale"], min(SEED_GRID)).items()}
         p.parent.mkdir(parents=True, exist_ok=True)
         json.dump(out, open(p, "w"))
@@ -252,10 +273,10 @@ def _transform_phase(variant, cfg, src, fold, seed, phase):
             out[stem] = apply_fits(d, fits_for(src, fold, seed, phase, t)[stem], metas[stem]["scale"], s_seed, mode)
         elif variant.endswith("_gtbandbox"):
             s_seed, mode = cfg
-            out[stem] = refine_image(d, gt_band(fold, phase, stem), metas[stem]["scale"], s_seed, mode)
+            out[stem] = refine_image(d, gt_band(fold, phase, stem, input_hw(metas[stem])), metas[stem]["scale"], s_seed, mode)
         else:  # _bandbox：预测 band
             t, s_seed, mode = cfg
-            out[stem] = refine_image(d, attn_to_band(attn[stem], t), metas[stem]["scale"], s_seed, mode)
+            out[stem] = refine_image(d, attn_to_band(attn[stem], t, input_hw(metas[stem])), metas[stem]["scale"], s_seed, mode)
     return out
 
 
@@ -275,8 +296,7 @@ def ext_fits(src, fold, seed, phase, t, t_low, gap, mirror):
     if key not in _EXT:
         dets, metas, attn = load_cache(src, fold, seed, phase)
         fits = fits_for(src, fold, seed, phase, t)
-        H, W = INPUT_SIZE
-        _EXT[key] = {stem: extend_image(fits[stem], cv2.resize(attn[stem], (W, H), interpolation=cv2.INTER_LINEAR),
+        _EXT[key] = {stem: extend_image(fits[stem], cv2.resize(attn[stem], input_hw(metas[stem])[::-1], interpolation=cv2.INTER_LINEAR),
                                         t_low, gap, bool(mirror)) for stem in dets}
     return _EXT[key]
 
@@ -360,6 +380,7 @@ for _s in GENERIC_SRCS:
     VARIANTS[f"{_s}_scale"] = (_s, [(k,) for k in K_GRID])
 VARIANTS[f"{UNSUP_SRC}_fitbox"] = (UNSUP_SRC, VARIANTS["hbatbox_flipfix_abs_fitbox"][1])
 VARIANTS[f"{UNSUP_SRC}_bandbox_nms"] = (UNSUP_SRC, VARIANTS["hbatbox_flipfix_abs_bandbox_nms"][1])
+VARIANTS.update(d1_variants(T_GRID, SEED_GRID, MODES, NMS_GRID, K_GRID))   # 数据集 1（dataset1/d1_exps.py），配合 --dataset ds1
 EXT_KINDS = ("fitmirror", "fittrack", "fittrackmirror", "fitext", "fitwscale")
 TL_GRID, GAP_GRID = (0.1, 0.2, 0.3, 0.5), (3, 8)
 EXT_SRCS = ("hbatbox_flipfix_abs", "hbatbox_flipfix_boxmask", "hbatbox_flipfix_abs_unet", "hbatbox_flipfix_boxmask_unet")
@@ -447,13 +468,22 @@ def build(variants):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stage", choices=["infer", "prefit", "build"])
-    ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=list(VARIANTS), help="build 阶段：要生成的变体")
-    ap.add_argument("--exps", nargs="+", default=list(SRC_EXPS), choices=list(SRC_EXPS), help="infer 阶段：要重推理的源实验")
+    ap.add_argument("--variants", nargs="+", default=None, choices=list(VARIANTS), help="build 阶段：要生成的变体（默认：该数据集的全部）")
+    ap.add_argument("--exps", nargs="+", default=None, choices=list(SRC_EXPS), help="infer 阶段：要重推理的源实验（默认：该数据集的全部）")
     ap.add_argument("--force", action="store_true", help="infer 阶段：已有缓存也重做")
+    ap.add_argument("--dataset", default="ds2", choices=["ds1", "ds2"], help="ds1 = 数据集 1（d1_* 实验）")
+    ap.add_argument("--jobs", type=int, default=24, help="prefit 阶段的进程数")
     args = ap.parse_args()
+    set_dataset(args.dataset)
+    is_d1 = lambda name: name.startswith("d1_")   # noqa: E731
+    if args.exps is None:
+        args.exps = [e for e in SRC_EXPS if is_d1(e) == (args.dataset == "ds1")]
+    if args.variants is None:
+        args.variants = [v for v in VARIANTS if is_d1(v) == (args.dataset == "ds1")]
+    assert all(is_d1(n) == (args.dataset == "ds1") for n in args.exps + args.variants), "d1_* 只配 --dataset ds1"
     if args.stage == "infer":
         infer(args.exps, args.force)
     elif args.stage == "prefit":
-        prefit(args.variants)
+        prefit(args.variants, args.jobs)
     else:
         build(args.variants)

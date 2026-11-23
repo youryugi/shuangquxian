@@ -25,10 +25,23 @@ from __future__ import annotations
 import numpy as np
 
 SLOPES = np.geomspace(1.0, 6.0, 13)      # 数据集 2 标注的 slope 范围 1.2–5.0
+# 下面的像素常数都是在 224×224 输入上定的。输入换尺寸时（数据集 1 的 --input-size），fit_seed 按 W / REF_SIZE 等比缩放，
+# 保持它们占图像的比例不变；W = 224 时缩放系数正好是 1，数据集 2 的结果逐位不变。
+REF_SIZE = 224
 GAP = 3                                  # 允许曲线上连续 GAP 列没有 band（预测的 band 会断）
 MIN_SUPPORT = 12                         # 被支持的列数小于此值 → 保留原框
 DV_CAP = 12.0                            # 打分时"到 band 上下边缘的竖直距离"的封顶值（两条 band 交叉处竖直方向很厚，不让它主导）
 DEFAULT_THICK = 16.0                     # 量不出厚度时用的默认值（标注厚度中位数 16.3 px）
+
+# slope 网格按数据集设：数据集 1 的 pipe slope 5–95% 分位 0.63–9.6、rebar 中位 7.7（dataset1/data_stats.md），
+# 1–6 的网格会撞边界。步长和 ds2 相同（几何级数每格约 ×1.16）。
+SLOPE_GRIDS = {"ds2": (1.0, 6.0, 13), "ds1": (0.5, 12.0, 23)}
+
+
+def configure_slopes(dataset):
+    global SLOPES
+    lo, hi, n = SLOPE_GRIDS[dataset]
+    SLOPES = np.geomspace(lo, hi, n)
 
 
 def _runs(hit, lead, val):
@@ -57,17 +70,19 @@ def fit_seed(band, box):
     """band: (H, W) bool（输入分辨率）；box: (x1, y1, x2, y2) 同一坐标系。
     返回 dict(xv, yv, slope, xl, xr, y_top, y_bot, thick, support) 或 None（找不到被支持的曲线）。"""
     H, W = band.shape
+    q = W / REF_SIZE                                      # 像素常数的缩放系数（224 输入 = 1）
+    gap = int(round(GAP * q))
     x1, y1, x2, y2 = box
-    w, h = max(x2 - x1, 8.0), max(y2 - y1, 8.0)
+    w, h = max(x2 - x1, 8.0 * q), max(y2 - y1, 8.0 * q)
     # band 沿水平方向膨胀 GAP 列：等价于允许曲线上有 GAP 列的缺口
     bg = band.copy()
-    for s in range(1, GAP + 1):
+    for s in range(1, gap + 1):
         bg[:, s:] |= band[:, :-s]; bg[:, :-s] |= band[:, s:]
-    dv = np.minimum(vertical_edge_distance(band), DV_CAP)
-    step = max(2.0, w / 24.0)
-    rx = max(0.5 * w, 16.0)
+    dv = np.minimum(vertical_edge_distance(band), DV_CAP * q)
+    step = max(2.0 * q, w / 24.0)
+    rx = max(0.5 * w, 16.0 * q)
     xv_grid = (x1 + x2) / 2 + np.arange(-rx, rx + 1e-6, step)
-    yv_grid = np.arange(y1 - 8.0, y1 + max(0.5 * h, 16.0) + 1e-6, max(2.0, h / 24.0))
+    yv_grid = np.arange(y1 - 8.0 * q, y1 + max(0.5 * h, 16.0 * q) + 1e-6, max(2.0 * q, h / 24.0))
     YV, SL = np.meshgrid(yv_grid, SLOPES, indexing="ij")
     YV, SL = YV.ravel(), SL.ravel()                       # [P]
     A = np.maximum(1.0, np.abs(YV)); B = A / SL
@@ -93,7 +108,7 @@ def fit_seed(band, box):
         if cols_n[k] > 0 and (best is None or score[k] > best["support"]):
             best = {"xv": float(xv), "yv": float(YV[k]), "slope": float(SL[k]), "xl": int(xl[k]), "xr": int(xr[k]),
                     "support": float(score[k]), "n_cols": int(cols_n[k]), "_yc": yc[k].copy()}
-    if best is None or best["n_cols"] < MIN_SUPPORT:
+    if best is None or best["n_cols"] < MIN_SUPPORT * q:
         return None
     yc = best.pop("_yc")
     # 允许缺口用的是水平膨胀后的 band，所以这一段的两端会多出最多 GAP 列：按原始 band 把两端收回来
@@ -117,8 +132,8 @@ def fit_seed(band, box):
         while dn < H - 1 and col[dn + 1]:
             dn += 1
         thick.append(dn - up + 1)
-    th = float(np.median(thick)) if thick else DEFAULT_THICK
-    th = float(np.clip(th, 4.0, 48.0))
+    th = float(np.median(thick)) if thick else DEFAULT_THICK * q
+    th = float(np.clip(th, 4.0 * q, 48.0 * q))
     y_top = float(min(yc[xs].min(), best["yv"] if best["xl"] <= best["xv"] <= best["xr"] else np.inf)) - th / 2
     y_bot = float(yc[xs].max()) + th / 2
     best.update(thick=th, y_top=y_top, y_bot=y_bot)

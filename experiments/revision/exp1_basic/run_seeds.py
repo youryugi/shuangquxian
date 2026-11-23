@@ -4,7 +4,7 @@
     python run_seeds.py --exps hbatbox_aug_none hbatbox_aug_abs --folds 0 --seeds 0 1 2 --jobs 2
 
 每个 run 的控制台输出写到 <runs>/log_<exp>_f<fold>_seed<k>.txt，总日志 <runs>/run_seeds.log。
-run 目录：<runs>/ds2/<exp>/f<fold>_seed<k>/
+run 目录：<runs>/ds2/<exp>/f<fold>_seed<k>/；d1_* 实验（数据集 1，定义在 dataset1/d1_exps.py）在 <runs>/ds1/<exp>/ 下
 """
 from __future__ import annotations
 
@@ -17,6 +17,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DATASETS = HERE.parent / "shared" / "datasets"
 PY = sys.executable
+sys.path.insert(0, str(HERE / "dataset1"))
+from d1_exps import D1_EXPS  # noqa: E402
+
+
+def dataset_of(exp):
+    """d1_* = 数据集 1，其余 = 数据集 2。"""
+    return "ds1" if exp.startswith("d1_") else "ds2"
 
 # 实验名 -> (数据目录后缀, 额外参数)
 EXPS = {
@@ -91,6 +98,7 @@ EXPS = {
     "hbatbox_flipfix_abs_vis":     ("_hbatbox", ["--mode", "abs", "--augment", "--attn-weight-dir", "wmaps_band_vis124"]),
     "hbatbox_flipfix_boxmask_vis": ("_hbatbox", ["--mode", "abs", "--augment", "--mask-dir", "masks_box", "--attn-weight-dir", "wmaps_box_vis124"]),
 }
+EXPS.update(D1_EXPS)   # 数据集 1：dataset1/d1_exps.py
 DEFAULT_EXPS = ["hbatbox_aug_none", "hbatbox_aug_abs", "aug_none", "aug_abs"]
 
 
@@ -120,12 +128,13 @@ def main():
             for exp in args.exps:
                 suffix, extra, *script = EXPS[exp]
                 script = script[0] if script else "train_basic.py"
-                data = DATASETS / f"ds2_f{fold}_s100{suffix}"
-                run_dir = runs / "ds2" / exp / f"f{fold}_seed{seed}"
+                ds = dataset_of(exp)
+                data = DATASETS / f"{ds}_f{fold}_s100{suffix}"
+                run_dir = runs / ds / exp / f"f{fold}_seed{seed}"
                 if (run_dir / "metrics.json").exists():
                     continue
                 if not data.exists():
-                    raise SystemExit(f"dataset dir missing: {data} (run prepare_data.py --fold {fold} first)")
+                    raise SystemExit(f"dataset dir missing: {data} (run prepare_data.py --dataset {ds} --fold {fold} first)")
                 cmd = [PY, "-X", "utf8", str(HERE / script), "--data", str(data), "--exp", exp, "--seed", str(seed),
                        "--runs", str(runs), "--fold-in-path", "--workers", str(args.workers), *extra, *args.extra]
                 jobs.append((exp, fold, seed, cmd))

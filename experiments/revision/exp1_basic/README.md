@@ -19,7 +19,7 @@
 
 **主线**（11-21 决定）：论文证明的是 band attention 的作用，对照是 box-mask control（必要时加 scale control）。stage 2（Round 14，不用 band 的第二阶段框回归）和论文对象无关，不作为要超过的对照，见[附录 C](#附录-c潜在问题清单)。
 
-**下一步**：① 用 Round 19 的表替换论文 Table II；② 数据集 1 用同一协议重跑（等 band 标注补齐）；③ grouped：在 Round 22 的"解释掉再拟合"上继续（多轮解释、分配和再拟合交替）；④ 给 band 更多数据。详见[下一步](#下一步)。
+**下一步**：① 用 Round 19 的表替换论文 Table II；② 数据集 1 用同一协议重跑（2026-11-23 开始，过程记录在 [dataset1/](dataset1/README.md)）；③ grouped：在 Round 22 的"解释掉再拟合"上继续（多轮解释、分配和再拟合交替）；④ 给 band 更多数据。详见[下一步](#下一步)。
 
 ---
 
@@ -291,7 +291,7 @@ Round 4 起所有正式数字都按这套设置。
 
 ## 附录 C：潜在问题清单
 
-1. **数据集 1 还没用严格协议跑过**（最大空白）。Round 14–16 的结论也只在数据集 2 上成立。
+1. **数据集 1**：2026-11-23 第 2 轮完成（[dataset1/](dataset1/README.md)）。主 config 上 pipe 复现了 Round 18（band + fit +0.066，比 box-mask 高 0.049–0.058，都是 10/10）；rebar 被 fit 拉低，全部类别不显著；稳健性 config 上 pipe 未复现。Round 14–16 的结论仍只在数据集 2 上成立。
 2. **baseline 的框回归弱**（Round 14）：不用 band、只加 stage 2 是 0.632，高于 band + fit 的 0.585。11-21 决定 stage 2 不在主线上（它证明的是"再回归一次框有用"，与 band 无关），band 的对照是 box-mask control。审稿人如果问"更强的检测器上 band 还有没有用"，目前的证据只有 YOLOv8s + band（为零）。
 3. ~~band 特有效应 CI 下界贴着 0~~：Round 18 用 hyperbola fit 后，对 box-mask control +0.086 / 对 box-mask 最好的后处理 +0.044，都是 10/10，换参数仍成立。仍未做：强检测器上的复现、数据集 1。
 4. fusion 效应（+0.004 / +0.019）和换显卡差别（+0.013）同量级，n = 10 分辨不出 0.02 以下。

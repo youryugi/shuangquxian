@@ -38,15 +38,27 @@ OUT = HERE / "runs_cv" / "refine"
 DATASETS = HERE.parent / "shared" / "datasets"
 EXP_ABS, EXP_NONE = "hbatbox_aug_abs", "hbatbox_aug_none"
 FOLDS, SEEDS = range(5), range(10)
+DS = "ds2"           # infer_bandbox.py --dataset 通过 set_dataset 改（gt_band 读这个数据集的掩码）
 
 T_GRID = (0.3, 0.4, 0.5, 0.6, 0.7)
 SEED_GRID = (0.1, 0.2, 0.3, 0.5)
 MODES = ("replace", "union", "blend")
-MIN_PX = 30          # 带像素少于此数（输入分辨率）→ 保留原框
+MIN_PX = 30          # 带像素少于此数（224 输入）→ 保留原框；其他输入尺寸按面积等比缩放
+
+
+def set_dataset(ds):
+    global DS, RUNS
+    DS, RUNS = ds, HERE / "runs_cv" / ds
 
 
 def data_dir(fold):
-    return DATASETS / f"ds2_f{fold}_s100_hbatbox"
+    return DATASETS / f"{DS}_f{fold}_s100_hbatbox"
+
+
+def input_hw(meta):
+    """缓存的 meta（orig_size = (H, W)，scale = (sx, sy)）→ 这个 run 的输入分辨率 (H, W)。ds2：恰好 (224, 224)。"""
+    (oh, ow), (sx, sy) = meta["orig_size"], meta["scale"]
+    return int(round(oh * sy)), int(round(ow * sx))
 
 
 def run_dir(exp, fold, seed):
@@ -89,11 +101,13 @@ def infer():
 
 
 # ───────────────────────── 修正 ─────────────────────────
-def refine_image(dets, band_bin, scale, s_seed, mode, min_px=MIN_PX):
+def refine_image(dets, band_bin, scale, s_seed, mode, min_px=None):
     """dets: [[x1,y1,x2,y2,s],...] 原图坐标；band_bin: 输入分辨率 (H,W) bool；返回同格式的新 dets。"""
     if not dets or band_bin.sum() == 0:
         return [list(d) for d in dets]
     H, W = band_bin.shape
+    if min_px is None:
+        min_px = MIN_PX * (W / 224) ** 2
     sx, sy = scale
     boxes_in = np.array([[d[0] * sx, d[1] * sy, d[2] * sx, d[3] * sy] for d in dets], float)
     scores = np.array([d[4] for d in dets], float)
@@ -141,14 +155,15 @@ def load_attn(fold, seed, phase):
     return {k: z[k].astype(np.float32) for k in z.files}, metas
 
 
-def attn_to_band(A, t):
-    H, W = INPUT_SIZE
+def attn_to_band(A, t, hw=None):
+    """hw = 输入分辨率 (H, W)；不给 = 224（数据集 2 的原样）。数据集 1 用 input_hw(meta)。"""
+    H, W = hw or INPUT_SIZE
     return cv2.resize(A, (W, H), interpolation=cv2.INTER_LINEAR) > t
 
 
-def gt_band(fold, phase, stem):
+def gt_band(fold, phase, stem, hw=None):
     m = cv2.imread(str(data_dir(fold) / "masks_band" / phase / f"{stem}.png"), cv2.IMREAD_GRAYSCALE)
-    H, W = INPUT_SIZE
+    H, W = hw or INPUT_SIZE
     if m.shape != (H, W):
         m = cv2.resize(m, (W, H), interpolation=cv2.INTER_NEAREST)
     return m > 127
