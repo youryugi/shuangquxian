@@ -8,14 +8,16 @@ GPR B-scan 双曲线检测：HBAT 参数化标注 + 双曲线带掩码显式监�
 
 | 想知道 | 看这里 |
 |---|---|
-| **现在的结论、下一步做什么** | [experiments/revision/basic_ds2/README.md](experiments/revision/basic_ds2/README.md) 开头"答案"和"下一步" |
+| **现在的结论、下一步做什么** | [experiments/revision/exp1_basic/README.md](experiments/revision/exp1_basic/README.md) 开头"答案"和"下一步" |
 | 大修各实验的状态（审稿意见 → 实验 → 做到哪了） | [experiments/revision/README.md](experiments/revision/README.md) |
+| 实验 2：标注敏感性（厚度、跨度、顶点、slope、标注误差） | [experiments/revision/exp2_annotation_sensitivity/README.md](experiments/revision/exp2_annotation_sensitivity/README.md) |
 | 审稿意见逐条分析、修改计划、自查发现 S1–S5 | [paper/revision/revision_map.md](paper/revision/revision_map.md) |
-| basic_ds2 某一轮（Round 1–19）具体怎么做的 | [experiments/revision/basic_ds2/rounds.md](experiments/revision/basic_ds2/rounds.md) |
-| basic_ds2 的代码、结果目录、生成的汇总文件对应哪轮 | [basic_ds2/README.md 附录 B](experiments/revision/basic_ds2/README.md#附录-b文件与数据位置) |
-| 在新机器上复现 / 续跑 | [basic_ds2/README.md 附录 D](experiments/revision/basic_ds2/README.md#附录-d在新机器上复现--续跑) |
-| 数据导出、统一评估口径、检测器对比 | [experiments/revision/detector_comparison/README.md](experiments/revision/detector_comparison/README.md) |
-| YOLOv8 + band 辅助监督（插件实验） | [experiments/revision/yolo_band_ds2/README.md](experiments/revision/yolo_band_ds2/README.md) |
+| 实验 1（exp1_basic）某一轮（Round 1–22）具体怎么做的 | [experiments/revision/exp1_basic/rounds.md](experiments/revision/exp1_basic/rounds.md) |
+| exp1_basic 的代码、结果目录、生成的汇总文件对应哪轮 | [exp1_basic/README.md 附录 B](experiments/revision/exp1_basic/README.md#附录-b文件与数据位置) |
+| 在新机器上复现 / 续跑 | [exp1_basic/README.md 附录 D](experiments/revision/exp1_basic/README.md#附录-d在新机器上复现--续跑) |
+| 数据导出、统一评估口径（实验 1–3 共用） | [experiments/revision/shared/README.md](experiments/revision/shared/README.md) |
+| 实验 3：和成熟检测器对比（YOLOv8s / Faster R-CNN 等） | [experiments/revision/exp3_comparison/detectors/README.md](experiments/revision/exp3_comparison/detectors/README.md) |
+| 实验 3：YOLOv8 + band 辅助监督（插件实验） | [experiments/revision/exp3_comparison/yolo_band/README.md](experiments/revision/exp3_comparison/yolo_band/README.md) |
 | 投稿版论文每张表 / 图来自哪个脚本、哪次运行 | [experiments/submission/README.md](experiments/submission/README.md) |
 | 数据集来源、目录、标注格式 | [data/README.md](data/README.md) |
 | 分组划分（5 折、固定测试集） | [data/splits/README.md](data/splits/README.md)（生成文件） |
@@ -26,7 +28,7 @@ GPR B-scan 双曲线检测：HBAT 参数化标注 + 双曲线带掩码显式监�
 ## 写文档的约定
 
 - 每个实验目录只放**一个** `README.md`：开头几行给答案 → 术语表 → 一页总览 → 下一步 → 附录（代码、结果、复现）。按时间线的逐轮记录超过几百行时拆到同目录的 `rounds.md`。
-- 当前结论**只写在 basic_ds2 README 开头一处**；其他文档只放链接，不复制数字（避免改一处漏一处）。
+- 当前结论**只写在 exp1_basic README 开头一处**；其他文档只放链接，不复制数字（避免改一处漏一处）。
 - 正式数字只认标为"正式结果"的那一节；标了"已取代"的不要引用。
 - 术语用英文（baseline、arm、fold、recall、box refinement 等），README 开头放术语表。
 - 结果目录里的 `*.pth / *.pt / *.png / *.jpg / *.npz` 不入库（.gitignore）；重跑脚本可以再生成。
@@ -78,9 +80,12 @@ experiments/                 实验代码与结果。每个实验目录：README
     cross_dataset/             跨数据集 → Table V
     explore/                   探索分支，未进论文（已删模型权重和可视化图）
   revision/                  大修阶段实验 → experiments/revision/README.md
-    detector_comparison/       共享的数据导出 + 统一评估 + 完整检测器对比 / 带监督插件（实验 3）
-    basic_ds2/                 基础实验重跑：数据集 2 新标注、干净协议（README = 结论；rounds.md = 逐轮记录）
-    yolo_band_ds2/             YOLOv8s + band 辅助监督
+    shared/                    共享：数据导出（prepare_data.py → datasets/）、统一评估（evaluate.py）、common.py
+    exp1_basic/                实验 1 基础实验：有无 band attention、band + hyperbola fit；目前做了数据集 2（README = 结论；rounds.md = 逐轮记录）
+    exp2_annotation_sensitivity/  实验 2 标注敏感性：扰动 HBAT 参数重画监督掩码（数据集 2）
+    exp3_comparison/           实验 3 对比：和成熟检测器比
+      detectors/                 YOLOv8s / Faster R-CNN 等检测器对比、band 插件代码（band_yolo.py）
+      yolo_band/                 YOLOv8s + band 辅助监督（插件实验）
 
 paper/
   manuscript/                  投稿版（JSTARS-2026-06074）：2main.tex + 1references.bib + 图；修改稿在此基础上改
