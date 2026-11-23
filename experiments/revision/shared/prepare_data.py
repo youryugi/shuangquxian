@@ -3,7 +3,8 @@
     python prepare_data.py --dataset ds2 --fold 0 --subset 100 --missing-mask skip
 
 Output  (default: experiments/revision/shared/datasets/<ds>_f<fold>_s<subset>/)
-    images/{train,val,test}/<stem>.jpg      copied images (train: every copy; val/test: eval_file only)
+    images/{train,val,test}/<stem>.jpg      copied images (train: every copy; val/test: eval_file only);
+                                            ds1 items with a confirmed crop are cropped + resized (common.load_image)
     labels/{train,val,test}/<stem>.txt      official GT boxes, YOLO format
     masks_band/{train,val,test}/<stem>.png  HBAT hyperbola-band mask, union over targets (0/255)
     masks_box/{...}                         control mask: official boxes filled solid
@@ -29,9 +30,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from common import (DATASETS, REPO, HERE, boxes_to_yolo_lines, hbat_objects, image_size, item_files,
+from common import (DATASETS, REPO, HERE, boxes_to_yolo_lines, hbat_objects, item_files, load_image,
                     load_json, load_split, official_boxes, render_band_mask, render_box_mask, resolve_split,
                     save_json, stem_of)
+import d1_crop  # noqa: E402  (path inserted by common)
 import hbat  # noqa: E402  (path inserted by common)
 
 
@@ -119,14 +121,16 @@ def main():
                     continue
             for f in files:
                 src = REPO / f
-                size = image_size(src)
+                img, size = load_image(ds, item_id, f)      # ds1: cropped + resized into the annotation frame
                 boxes_off = official_boxes(ds, item_id, item, f, size)
                 boxes_hb, n_fb = hbat_boxes(band_objs, boxes_off, size) if has_band else ([], 0)
                 n_fallback += n_fb
                 boxes = boxes_hb if args.box_source == "hbat" else boxes_off
                 stem = stem_of(f)
                 dst = out / "images" / ph / (stem + src.suffix.lower())
-                if args.no_copy:
+                if img is not None:
+                    d1_crop.imwrite_jpg(str(dst), img)
+                elif args.no_copy:
                     try:
                         dst.symlink_to(src)
                     except OSError:
