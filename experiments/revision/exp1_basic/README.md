@@ -2,7 +2,9 @@
 
 **问题**：论文 Table IV 说"用 hyperbola band mask 监督 attention，检测 F1 从 0.67 升到 0.73"。换上重新标注的数据、用严格的实验方法重跑，这个提升还在吗？如果不在，band 标注还有什么价值？
 
-**答案（截至 2026-11-22，Round 22；新口径：预测框裁到图内，翻转增强 bug 已修）**
+**主方法 = band + fit**（训练 `hbatbox_flipfix_abs`，推理沿预测 band 拟合双曲线定框，结果 `runs_cv/ds2/hbatbox_flipfix_abs_fitbox/`）。正式结果是下面第 2、3 条（Round 18、19）；定义、选中的参数和它在全部实验（数据集 1、实验 2–4）里的结果汇总在 [../README.md 第 0 节](../README.md#0-主方法-band--fit定义和全部结果2026-11-24-汇总)。
+
+**答案（截至 2026-11-23，Round 24；新口径：预测框裁到图内，翻转增强 bug 已修）**
 
 1. **论文的 +0.06 不在。** 严格协议下 +attention（band fusion）是 +0.023（8/2），而且 fusion 这一步 band 和填实的框没有区别（−0.008，n.s.）。原来的提升来自 data leakage 和没对齐的初始化。
 2. **把 band 用来定框，主张成立。** 沿预测的 band 拟合双曲线定框（hyperbola fit），F1 0.472 → **0.585**（+0.112，10/10 seeds）。band 形状的贡献由 box-mask control（同结构，只把监督换成填实的框）分离：
@@ -173,7 +175,11 @@
 | **[17](rounds.md#round-17参数化检测头网络直接输出双曲线参数)** | 11-21 | **参数化头**：热图峰 = 顶点，回归 slope / span / thickness，框闭式算出；修好翻转增强 bug（新口径） | 修好翻转 0.471；pseudo 0.545；param 0.550 | 参数化 +0.08（10/10），但只用框反推参数的 pseudo 拿到几乎全部；真实参数只在单翼目标上 recall +0.066；翻转 bug 修好后 F1@0.5 不变 |
 | **[18](rounds.md#round-18修好翻转后重跑band--hyperbola-fit-的正式结论)** | 11-21 | **修好翻转后重跑 300 个第一阶段 run + 18 个后处理变体**（新口径） | baseline 0.472；box-mask + fit 0.499；**band + fit 0.585** | **对 box-mask + fit +0.086，对 box-mask 最好的后处理 +0.044，都是 10/10，换参数仍成立。正式结果**；Voronoi 上的 band 特有效应不稳健 |
 | **[19](rounds.md#round-19固定测试集--递增训练数据数据效率回应-r2-6)** | 11-21 | **固定测试集 + 训练数据 25 / 50 / 75 / 100%**（450 个 run + 24 个后处理变体） | band + fit 0.443 / 0.528 / 0.564 / 0.585；baseline 0.273 / 0.390 / 0.465 / 0.472 | **每个比例都赢 baseline（10/10）和 box-mask 最好的后处理（+0.044–0.055）**；fusion 在任何比例都不显著 |
+| [20](rounds.md#round-20补翼尖曲线归属加权-attention-损失grouped-targets-的三种补法) | 11-21 | 补翼尖（对称补翼、沿曲线续走）、曲线归属、按目标均衡 + 翼尖加权的 attention 损失 | band + fit 仍 0.585；曲线归属 grouped recall 0.489，F1 不变 | 四种做法都没有提升；grouped 丢在 fit 之后的去重 |
 | **[21](../exp2_annotation_sensitivity/README.md)** | 11-22 | **标注敏感性**：15 套扰动后的 band 监督掩码（厚度、跨度、顶点、slope、重复标注差值），750 个 run | 标准 0.585；厚度 ×0.5–×1.25 0.578–0.579；统一厚度 0.583；重复标注 ×1 0.576；跨度 ±25% 0.537 | **厚度、实测标注误差下稳健；跨度最敏感；15 档全部赢 baseline** |
+| [22](rounds.md#round-22fit-之后检测和曲线怎么配对降分保留几何判重全图分配解释掉再拟合) | 11-22 | fit 之后检测和曲线的四种配对规则（只改推理） | 解释掉再拟合：conv 0.585 → 0.594、unet 0.585 → 0.597（都 8/10） | 唯一只对 band 成立、涨 grouped 召回的规则；统一按验证集选时选不中，只作附加分析 |
+| [23](rounds.md#round-23fit-和-grouped-的矛盾只改去重--定框能不能两头都保住2026-11-23) | 11-23 | curve-aware NMS、拥挤处不 fit、soft-NMS（只改推理） | soft-NMS +0.013（8/2），box-mask 上也 +0.021 | grouped 和 alone 此消彼长，只改推理两头保不住 |
+| [24](rounds.md#round-24attention-损失按-visibility-加权让-weak--medium-的-band-画出来2026-11-23) | 11-23 | attention 损失按 visibility 加权（weak ×4、medium ×2） | band + fit −0.040；weak 覆盖率 0.110 → 0.104 | weak band 学不出来，是数据问题 |
 
 ---
 
@@ -181,17 +187,17 @@
 
 ## 下一步
 
-（2026-11-21 Round 18 之后。）
+（2026-11-21 Round 18 之后写；11-24 更新了数据集 1 和 YOLO 的状态。）
 
 | 优先级 | 做什么 | 为了回答什么 | 成本 |
 |---|---|---|---|
 | **0** | **用 Round 19 的表替换论文 Table II**：固定测试集 + 递增训练集，列 baseline、+attention（fusion）、box-mask 最好的后处理、band + fit、真实 band + fit（上限），均值 ± std + 配对 Δ | 回应 R2-6、R2-8；原论文"各训练比例下都提升"的主张换成有对照支持的版本 | 只需写作（表、图的数字都在 `runs_cv/data_efficiency/`） |
-| **2** | **数据集 1 用严格协议重跑**（等 band 标注补齐）：baseline / +attention / box-mask control / band + fit / box-mask + fit / box-mask + Voronoi + NMS，`--workers 1`，用修好的翻转 | 主结论能不能在另一份数据上复现。数据集 1 有 170 张原图（每折训练约 124 张） | 约 150 个 run；`infer_bandbox.py`、`diag_band_quality.py` 里写死的 `ds2` 路径要先参数化 |
+| **2** | **数据集 1 用严格协议重跑**（11-23 起进行中，第 2 轮完成，见 [dataset1/](dataset1/README.md)；下面是原计划）：baseline / +attention / box-mask control / band + fit / box-mask + fit / box-mask + Voronoi + NMS，`--workers 1`，用修好的翻转 | 主结论能不能在另一份数据上复现。数据集 1 有 170 张原图（每折训练约 124 张） | 约 150 个 run；`infer_bandbox.py`、`diag_band_quality.py` 里写死的 `ds2` 路径要先参数化 |
 | 3 | **给 band 更多数据**：两个数据集合并训练 attention head；或用合成双曲线（HBAT 参数模型随机采样、叠到无目标背景上）预训练 attention head 再微调 | 预测 band 的测试 IoU 停在 0.38–0.48，训练 0.76：受数据量限制 | 合成数据生成 + 每组 100 run |
 | 4 | 形状输出的价值：hyperbola fit 给出每个目标的顶点和 slope（对应波速），和 HBAT 标注比误差；对照 = 从框反推 | band 在"检测 F1"之外的用途；Round 17 已看到单翼目标上的差别 | 只需评估代码 |
 | 5 | 两次硬件复现怎么写进论文 | fusion 效应和换卡噪声（+0.013）同量级 | 只需写作 |
 
-已完成：~~box refinement 做进推理~~（R12）；~~换掉 Voronoi split~~（R15）；~~λ、gate、oracle 上限~~（R7–10）；~~论文怎么面对 stage 2~~（11-21 决定：不作为主线对照）；~~修好翻转后重跑~~（R18）；~~固定测试集 + 递增训练集~~（R19）；~~形状外推、曲线归属、加权 attention 损失~~（R20，都没有提升）；~~标注敏感性~~（R21）。不再优先：hyperbola fit 接在 stage 2 之后（stage 2 不在主线上）；scale control 宽高分开（band 对 scale control 已是 +0.093，10/10）；YOLOv8s + band（结果为零，见 `../exp3_comparison/yolo_band/`）。
+已完成：~~box refinement 做进推理~~（R12）；~~换掉 Voronoi split~~（R15）；~~λ、gate、oracle 上限~~（R7–10）；~~论文怎么面对 stage 2~~（11-21 决定：不作为主线对照）；~~修好翻转后重跑~~（R18）；~~固定测试集 + 递增训练集~~（R19）；~~形状外推、曲线归属、加权 attention 损失~~（R20，都没有提升）；~~标注敏感性~~（R21）；~~fit 之后的配对规则~~（R22）；~~只改去重 / 定框~~（R23）；~~按 visibility 加权 attention 损失~~（R24）。不再优先：hyperbola fit 接在 stage 2 之后（stage 2 不在主线上）；scale control 宽高分开（band 对 scale control 已是 +0.093，10/10）；YOLOv8s + band（COCO 预训练时为零；从零训练、只翻转时 +0.034，见 `../exp3_comparison/yolo_band/` 和 `../exp3_comparison/detectors/`）。
 
 **写作要点**
 
@@ -292,8 +298,8 @@ Round 4 起所有正式数字都按这套设置。
 ## 附录 C：潜在问题清单
 
 1. **数据集 1**：2026-11-23 第 2 轮完成（[dataset1/](dataset1/README.md)）。主 config 上 pipe 复现了 Round 18（band + fit +0.066，比 box-mask 高 0.049–0.058，都是 10/10）；rebar 被 fit 拉低，全部类别不显著；稳健性 config 上 pipe 未复现。Round 14–16 的结论仍只在数据集 2 上成立。
-2. **baseline 的框回归弱**（Round 14）：不用 band、只加 stage 2 是 0.632，高于 band + fit 的 0.585。11-21 决定 stage 2 不在主线上（它证明的是"再回归一次框有用"，与 band 无关），band 的对照是 box-mask control。审稿人如果问"更强的检测器上 band 还有没有用"，目前的证据只有 YOLOv8s + band（为零）。
-3. ~~band 特有效应 CI 下界贴着 0~~：Round 18 用 hyperbola fit 后，对 box-mask control +0.086 / 对 box-mask 最好的后处理 +0.044，都是 10/10，换参数仍成立。仍未做：强检测器上的复现、数据集 1。
+2. **baseline 的框回归弱**（Round 14）：不用 band、只加 stage 2 是 0.632，高于 band + fit 的 0.585。11-21 决定 stage 2 不在主线上（它证明的是"再回归一次框有用"，与 band 无关），band 的对照是 box-mask control。审稿人如果问"更强的检测器上 band 还有没有用"：band 辅助监督在 COCO 预训练的 YOLOv8s 上不显著（+0.014），在从零训练、只翻转的 YOLOv8s 上 +0.034（8/2）；预训练 YOLOv8s 上再走 fit 反而 −0.029（见 `../exp3_comparison/`）。
+3. ~~band 特有效应 CI 下界贴着 0~~：Round 18 用 hyperbola fit 后，对 box-mask control +0.086 / 对 box-mask 最好的后处理 +0.044，都是 10/10，换参数仍成立。强检测器（预训练 YOLOv8s）上不成立；数据集 1 只在 pipe 的主 config 上复现（见第 1 条）。
 4. fusion 效应（+0.004 / +0.019）和换显卡差别（+0.013）同量级，n = 10 分辨不出 0.02 以下。
 5. 预测 band 的测试 IoU 在三种设计下都只有 0.38–0.48，训练图上可达 0.76。数据量变大之前，继续改结构预期收益很小。
 6. "不降低检测精度"是很弱的主张；整体精度低（F1 0.47，从零训练、每折 91 张）。
@@ -315,7 +321,7 @@ cd shuangquxian
 pip install -r requirements.txt        # torch 按机器的 CUDA 版本装，见文件内注释
 
 # 1. 重建数据目录（datasets/ 不入库，约 1 分钟）
-cd experiments/revision/exp3_comparison/detectors
+cd experiments/revision/shared
 for f in 0 1 2 3 4; do
   python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source hbat
   python prepare_data.py --dataset ds2 --fold $f --subset 100 --box-source official

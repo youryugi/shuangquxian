@@ -30,6 +30,7 @@ FOLDS = [0, 1, 2, 3, 4]
 ROWS = [
     ("ours_none", "本文 baseline（轻量 CNN，无 attention）", REV / "exp1_basic/runs_cv", "hbatbox_flipfix_none", "无", "左右翻转"),
     ("ours_band", "本文 + band attention", REV / "exp1_basic/runs_cv", "hbatbox_flipfix_abs", "无", "左右翻转"),
+    ("ours_fit", "本文 + band + fit（主方法）", REV / "exp1_basic/runs_cv", "hbatbox_flipfix_abs_fitbox", "无", "左右翻转"),
     ("y8s_scr_flip", "YOLOv8s 从零", REV / "exp3_comparison/yolo_band/runs_cv", "y8s_scr_flip_none", "无", "左右翻转"),
     ("y8s_scr_flip_band", "YOLOv8s 从零 + band 辅助监督", REV / "exp3_comparison/yolo_band/runs_cv", "y8s_scr_flip_band", "无", "左右翻转"),
     ("y8s_pre_flip", "YOLOv8s 预训练", REV / "exp3_comparison/yolo_band/runs_cv", "y8s_pre_flip_none", "COCO", "左右翻转"),
@@ -39,6 +40,7 @@ ROWS = [
 # 配对比较（A -> B，同一 seed）
 PAIRED = [
     ("ours_none", "ours_band", "本文：band attention 的作用"),
+    ("ours_none", "ours_fit", "本文：band + fit（主方法）对 baseline"),
     ("y8s_scr_flip", "y8s_scr_flip_band", "YOLOv8s 从零：band 辅助监督的作用"),
     ("y8s_scr_flip", "y8s_pre_flip", "YOLOv8s：预训练的作用（都只翻转）"),
     ("y8s_pre_flip", "y8s_pre_full", "YOLOv8s 预训练：全套增广的作用"),
@@ -47,6 +49,7 @@ PAIRED = [
 UNPAIRED = [
     ("ours_band", "y8s_scr_flip", "本文 + band vs YOLOv8s 从零（条件对齐）"),
     ("ours_none", "y8s_scr_flip", "本文 baseline vs YOLOv8s 从零（条件对齐）"),
+    ("ours_fit", "y8s_scr_flip", "本文 + band + fit vs YOLOv8s 从零（条件对齐）"),
 ]
 
 
@@ -80,7 +83,8 @@ def pooled(rds):
 
 # 轻量模型的 run_info 没有 GFLOPs：用 exp1_basic/train_basic.py 的 build_model 在 1×1×224×224 上
 # 以 torch.utils.flop_counter 数出来（2026-11-21，CPU）。和 ultralytics / train_frcnn 一样按 2×MAC 计。
-LIGHT_GFLOPS = {"hbatbox_flipfix_none": 6.272, "hbatbox_flipfix_abs": 6.838}
+# band + fit 的网络就是 hbatbox_flipfix_abs；fit 是推理后的 CPU 后处理，不计入 GFLOPs。
+LIGHT_GFLOPS = {"hbatbox_flipfix_none": 6.272, "hbatbox_flipfix_abs": 6.838, "hbatbox_flipfix_abs_fitbox": 6.838}
 
 
 def model_size(root, exp):

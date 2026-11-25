@@ -1,4 +1,4 @@
-# exp1_basic 实验记录：Round 1–19（按时间线）
+# exp1_basic 实验记录：Round 1–24（按时间线；Round 21 的正文在 ../exp2_annotation_sensitivity/）
 
 每轮按"为什么做 / 做了什么 / 结果 / 结论"写。**先看 [README.md](README.md)**：答案、术语表、一页总览、下一步、文件位置都在那里；这里只是逐轮的详细过程。
 

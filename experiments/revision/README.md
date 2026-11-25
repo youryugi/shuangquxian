@@ -2,6 +2,47 @@
 
 计划来源：[paper/revision/revision_map.md](../../paper/revision/revision_map.md)（审稿意见逐条分析 → 第 3 步实验表）。本页只做导航和状态，数字和分析在各实验自己的 README 里。
 
+## 0. 主方法 band + fit：定义和全部结果（2026-11-24 汇总）
+
+本节把主方法在各实验里的结果放在一处，每个数字都链接到它的原始记录。fusion 单独（`hbatbox_flipfix_abs`，0.496）**不是**主方法的结果。
+
+**定义**：
+- 训练：attention head 用 HBAT band mask 监督（λ = 0.7，concat fusion，原 conv head），实验名 `hbatbox_flipfix_abs`。
+- 推理：沿预测的 band 给每个检测拟合一条双曲线（顶点 + slope），检测框扩到盖住 band 支持的那段曲线（[fit_hyperbola.py](exp1_basic/fit_hyperbola.py)、[infer_bandbox.py](exp1_basic/infer_bandbox.py)）。
+- 后处理参数在 10 seeds 的合并验证集上全局选一次，测试集不参与：band 阈值 0.7、种子分数 0.1、union、NMS 0.5（`exp1_basic/runs_cv/bandbox/chosen.json`，验证 0.587 / 测试 0.585）。
+- 结果目录：`exp1_basic/runs_cv/ds2/hbatbox_flipfix_abs_fitbox/`（5 折 × 10 seeds = 50 个）。
+
+**对照**：
+- baseline `hbatbox_flipfix_none`。
+- box-mask control（监督换成填实的 HBAT 框，其余不变）：走同一个 fit 是 `hbatbox_flipfix_boxmask_fitbox`；box-mask 最好的后处理是 Voronoi + NMS，`hbatbox_flipfix_boxmask_bandbox_nms`。
+- scale control `hbatbox_flipfix_none_scale`。
+- 上限：真实 band + fit `hbatbox_flipfix_abs_gtfitbox`。
+
+**全部结果**（F1@IoU0.5，5 折合并 × 10 seeds，按 seed 配对；Δ = 配对均值 [95% CI]，胜/平/负）
+
+| 实验 | 设置 | band + fit | 对 baseline（不加 attention） | 对 box-mask 对照 / 其他方法 | 原始记录 |
+|---|---|---|---|---|---|
+| **实验 1 Round 18（正式结果）** | 数据集 2，全部训练数据 | **0.585 ± 0.019** | 0.472 → 0.585：**+0.112 [+0.093, +0.132]，10/0/0**；AP50 +0.170 | box-mask + 同一 fit（0.499）+0.086 [+0.068, +0.105]；box-mask 最好的后处理（0.541）+0.044 [+0.026, +0.062]；scale control +0.093；三项都是 10/0/0。真实 band + fit 上限 0.662 | [rounds.md Round 18](exp1_basic/rounds.md#round-18修好翻转后重跑band--hyperbola-fit-的正式结论)、`exp1_basic/runs_cv/cv_summary.md` |
+| 实验 1 Round 19（数据效率，替换 Table II） | 数据集 2，固定测试集，训练 25 / 50 / 75 / 100% | 0.443 / 0.528 / 0.564 / 0.585 | +0.170 / +0.138 / +0.098 / +0.112，全部 10/0/0 | 各比例 box-mask 最好的后处理：+0.046 / +0.055 / +0.055 / +0.044 | [rounds.md Round 19](exp1_basic/rounds.md#round-19固定测试集--递增训练数据数据效率回应-r2-6)、`exp1_basic/runs_cv/data_efficiency/summary.md` |
+| 实验 1 数据集 1 第 2 轮 | s224（主 config），**pipe** | 0.441 | 0.375 → 0.441：+0.066 [+0.037, +0.098]，10/0/0 | box-mask + 同一 fit +0.058、Voronoi + NMS +0.049，都 10/0/0 | [dataset1/README](exp1_basic/dataset1/README.md)、`exp1_basic/dataset1/results/r2_fit.md` |
+| 〃 | s224，rebar / 全部类别 | 0.046 / 0.297 | rebar −0.078（0/0/10）；全部 +0.012 [−0.006, +0.031]（n.s.） | 全部类别：box-mask + fit +0.033（9/0/1） | 〃 |
+| 〃 | s224d4gb（稳健性 config），pipe / 全部类别 | 0.323 / 0.254 | pipe −0.005（n.s.）；全部 −0.029（1/0/9） | pipe 对 box-mask + fit −0.014（n.s.）：**未复现** | 〃 |
+| 实验 2（标注敏感性） | 数据集 2，15 套扰动的 band 标注重新训练 | 0.521–0.583（标准 0.585） | 15 档全部赢，最差 +0.049，10/0 | 厚度 ×0.5–×1.25、统一厚度、实测误差（顶点 2 px、slope ±10%、重复标注）下对 box-mask 最好的后处理仍 +0.031 到 +0.042；跨度 ±25%、厚度 ×0.25 / ×1.5 / ×2、误差翻倍时对 box-mask 不再显著 | [实验 2 README](exp2_annotation_sensitivity/README.md) |
+| 实验 3（检测器对比） | 数据集 2，不预训练、只翻转 | 0.585 | — | 对从零 YOLOv8s（0.452）+0.133 [+0.116, +0.150]，AP50 +0.132（两组 seed 无配对，独立 bootstrap）；低于预训练 YOLOv8s（0.599）和 Faster R-CNN（0.724）。YOLO 那几行没有走 fit | [detectors README §0.7](exp3_comparison/detectors/README.md#07-结果2026-11-22)、`exp3_comparison/detectors/cv_compare.md` |
+| 实验 3（YOLO + band） | COCO 预训练、全套增广的 YOLOv8s 上走 fit | 0.681 | YOLO baseline 0.697，band arm 0.711；fit 让 band arm 掉 −0.029（1/0/9） | 对 box-mask + fit +0.070（10/0/0）。强检测器上 fit 不提 F1，只在被图像边缘截断的双曲线上给出更准的 slope（误差 ×1.09，用框推是 ×1.24） | [yolo_band README](exp3_comparison/yolo_band/README.md) |
+| 实验 4（通用注意力模块） | 数据集 2，对 SE / CBAM / Non-local / CA | 0.585 | — | 对四个模块 +0.055 到 +0.081（9/1 到 10/0）；模块也加 scale control 后 +0.049 到 +0.059（10/0）；不监督的 attention 走同一 fit 只有 0.466（−0.119，10/0） | [实验 4 README](exp4_attention/README.md) |
+
+**不要当主方法结果引用**：
+- `hbatbox_aug_*_fitbox`（Round 15、16 的 0.530 / 0.549）：带翻转 bug，以 `hbatbox_flipfix_*` 为准。
+- U-shaped decoder 版（`hbatbox_flipfix_abs_unet_fitbox`）：同样是 0.585，和原 head 打平，主方法用原 head。
+- Round 22 "解释掉再拟合"（0.594 / 0.597，8/10）：在全部规则里统一按验证集选时选不中，只能作附加分析。
+
+**主方法还没覆盖的地方**：
+- 数据集 1 的 rebar：fit 把成排的团状目标拟成一条，结果被拉低。
+- s224d4gb 上 pipe 没有复现，原因未查。
+- weak / grouped 目标上不如 CBAM / Non-local（实验 4），grouped 对 baseline +0.011，不显著。
+- 从零 YOLOv8s 没有走 fit 的对应行。
+
 ## 1. 目录（2026-11-22 按实验整理）
 
 | 目录 | 实验 | 作用 | 文档 | 状态 |
@@ -25,7 +66,7 @@
 | 1 | 几何先验消融：矩形框 / 椭圆 / 平移带 / 抛物线带 / 只加辅助头 | R1-1 | 矩形框（box-mask control）按正式协议完成；其余形状未做 | fusion 上 band 对 box-mask −0.008（n.s.）；按形状定框后 band 对 box-mask + fit **+0.086**、对 box-mask 最好的后处理 **+0.044**（都 10/10），同参数 145/180 → Round 13、18 |
 | 1 | 困难子集、按可见度分层、失败案例 | R2-1、R2-2、R2-10 | 数据集 2 分层 recall 完成；CNR / 杂波未算；失败案例图有工具（`vis_errors.py`），未选图 | baseline → band + fit：单翼 +0.142（8/2）、畸变 +0.079（6/2/2）、weak +0.069（n.s.）；grouped 对 baseline +0.011（n.s.），对 box-mask +0.105 → Round 18 |
 | 1 | 数据集 1 按类别报告（管线 / 钢筋排） | R2-1、R1-2 | 第 2 轮完成，按 pipe / rebar / 全部报告 | s224：band + fit 的 pipe 0.375 → 0.441（+0.066，10/10），比 box-mask + 同样后处理高 0.049–0.058（10/10）；rebar 0.124 → 0.046；全部 +0.012（不显著）；s224d4gb 上 pipe 未复现 → [dataset1/](exp1_basic/dataset1/README.md) 第 2 轮 |
-| 1 | 完整检测器对比 + 插件实验 | R1-3、R2-3 | **数据集 2 完成**（实验 3）：YOLOv8s 预训练 / 从零、Faster R-CNN 预训练，5 折 × 10 seeds；从零 YOLOv8s 的 box-mask 对照、预训练只翻转 YOLOv8s + band 未跑 | 条件对齐（都不预训练、只翻转）时本文 + band 0.496 对 YOLOv8s 0.452；band 在从零 YOLOv8s 上 +0.034（8/2），在预训练 YOLOv8s 上不显著；Faster R-CNN 预训练 0.724 最高 → [detectors/README](exp3_comparison/detectors/README.md) 0.7 节、[yolo_band/README](exp3_comparison/yolo_band/README.md) |
+| 1 | 完整检测器对比 + 插件实验 | R1-3、R2-3 | **数据集 2 完成**（实验 3）：YOLOv8s 预训练 / 从零、Faster R-CNN 预训练，5 折 × 10 seeds；从零 YOLOv8s 的 box-mask 对照、预训练只翻转 YOLOv8s + band 未跑 | 条件对齐（都不预训练、只翻转）时本文 + band 0.496 对 YOLOv8s 0.452，主方法 band + fit 0.585（+0.133，三个指标都更高，11-24 补进表）；band 在从零 YOLOv8s 上 +0.034（8/2），在预训练 YOLOv8s 上不显著；Faster R-CNN 预训练 0.724 最高 → [detectors/README](exp3_comparison/detectors/README.md) 0.7 节、[yolo_band/README](exp3_comparison/yolo_band/README.md) |
 | 1 | 通用注意力模块对比（SE、CBAM、Non-local、CA，替换 Table III） | R1-3、R2-3、R1-1 | **数据集 2 完成**（实验 4） | 只比注意力模块：四个模块都赢 baseline（+0.031 到 +0.058），band fusion 对 SE / CBAM / CA 打平、对 Non-local −0.034（0/10）；同结构不监督对 band 监督 +0.006（n.s.）。**band + fit 赢全部四个模块**（+0.055 到 +0.081；模块加 scale control 后仍 +0.049 到 +0.059，10/10）；不监督的 attention 走 fit 只有 0.466 → [实验 4](exp4_attention/README.md) |
 | 1 | 敏感性：thickness ×0.25–2、统一厚度、span ×0.75 / 1.25 | R1-4、R2-4、R1-2 | **数据集 2 完成**（实验 2） | 厚度 ×0.5–×1.25 和统一厚度不显著（0.578–0.583 对 0.585）；跨度 ±25% 掉 −0.047；全部档位赢 baseline → [实验 2](exp2_annotation_sensitivity/README.md) |
 | 2 | 敏感性：顶点偏移、slope 扰动、重复标注误差 | R1-4 | **数据集 2 完成**（实验 2） | 实测误差水平（顶点 2 px、slope ±10%、同一人重复标注）下不显著，仍对 box-mask 最好的后处理 +0.03；误差翻倍后对 box-mask 不再显著 → [实验 2](exp2_annotation_sensitivity/README.md) |
